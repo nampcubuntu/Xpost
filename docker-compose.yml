@@ -1,0 +1,100 @@
+# Xpost local/staging stack.
+#
+# Versions are pinned rather than :latest so a `docker compose pull` months from
+# now cannot swap MySQL or Redis underneath a working deployment.
+#
+#   docker compose up -d
+#   php artisan migrate --seed
+#   php artisan xpost:clickhouse-migrate     # only if CLICKHOUSE_ENABLED=true
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: xpost-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${DB_DATABASE:-xpost}
+      MYSQL_USER: ${DB_USERNAME:-xpost}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+    command:
+      # post_targets is the hot table; give InnoDB room to keep its index in
+      # memory, and utf8mb4 so tweet text with emoji round-trips intact.
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=1G
+      - --innodb-flush-log-at-trx-commit=2
+      - --max-connections=500
+    ports:
+      - '${DB_PORT:-3306}:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-p${DB_ROOT_PASSWORD:-root}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8.10-alpine
+    container_name: xpost-redis
+    restart: unless-stopped
+    command:
+      # Queues and locks must survive a restart, so AOF is on. noeviction is
+      # deliberate: silently dropping a queued job to reclaim memory would lose
+      # posts, so we would rather see writes fail loudly.
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - '1gb'
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8-alpine
+    container_name: xpost-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE:-xpost}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    ports:
+      - '${CLICKHOUSE_PORT:-8123}:8123'   # HTTP interface, what smi2 client uses
+      - '9000:9000'                       # native protocol, for clickhouse-client
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:8123/ping']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: xpost-mailpit
+    restart: unless-stopped
+    ports:
+      - '1025:1025'   # SMTP
+      - '8025:8025'   # web UI
+
+volumes:
+  mysql-data:
+  redis-data:
+  clickhouse-data:

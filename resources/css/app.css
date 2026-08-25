@@ -1,0 +1,74 @@
+@import 'tailwindcss';
+
+@theme {
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+    /* X's own palette, so the composer reads as part of the product it posts to. */
+    --color-x-blue: #1d9bf0;
+    --color-x-black: #0f1419;
+    --color-x-gray: #536471;
+    --color-x-border: #eff3f4;
+    --color-x-hover: #f7f9f9;
+}
+
+@layer base {
+    body {
+        color: var(--color-x-black);
+    }
+}
+
+/*
+ * Tailwind 4 will not @apply one custom utility from inside another, so the
+ * button base is spelled out in each variant rather than composed. Keeping the
+ * shared part as a comment-adjacent block is the closest thing to DRY that the
+ * engine allows here.
+ */
+@layer components {
+    .xp-field {
+        @apply w-full rounded-md border border-neutral-300 px-3 py-2 text-sm outline-none
+               transition placeholder:text-neutral-400
+               focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900;
+    }
+
+    .xp-label {
+        @apply block text-[13px] font-medium text-neutral-700;
+    }
+
+    .xp-hint {
+        @apply text-xs text-neutral-500;
+    }
+
+    .xp-card {
+        @apply rounded-lg border border-neutral-200 bg-white;
+    }
+
+    .xp-btn {
+        @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3.5 py-2
+               text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+    }
+
+    .xp-btn-primary {
+        @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3.5 py-2
+               text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50
+               bg-neutral-900 text-white hover:bg-neutral-800;
+    }
+
+    .xp-btn-ghost {
+        @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3.5 py-2
+               text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50
+               border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50;
+    }
+
+    .xp-nav-link {
+        @apply flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-neutral-600
+               transition hover:bg-neutral-100 hover:text-neutral-900;
+    }
+
+    .xp-nav-link-active {
+        @apply bg-neutral-100 font-medium text-neutral-900;
+    }
+
+    .xp-section-title {
+        @apply px-2 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wide text-neutral-400;
+    }
+}

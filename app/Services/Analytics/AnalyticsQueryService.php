@@ -1,0 +1,169 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services\Analytics;
+
+use App\Enums\TargetStatus;
+use App\Models\PostTarget;
+use App\Support\TeamContext;
+use Illuminate\Support\Carbon;
+
+/**
+ * Read path for the dashboard.
+ *
+ * ClickHouse answers the time-series questions; MySQL answers "what is the
+ * state of things right now". When ClickHouse is off, the time-series calls
+ * fall back to MySQL aggregates so the screens still render -- slower, but
+ * never blank.
+ */
+final class AnalyticsQueryService
+{
+    public function __construct(private readonly ClickHouseConnection $clickhouse) {}
+
+    /** Publish volume per day for the current team. */
+    public function dailyVolume(Carbon $from, Carbon $to, ?int $postId = null): array
+    {
+        $teamId = TeamContext::id() ?? 0;
+
+        if (! $this->clickhouse->enabled()) {
+            return $this->dailyVolumeFromMysql($from, $to, $postId);
+        }
+
+        $filter = $postId ? 'AND post_id = :post_id' : '';
+
+        $rows = $this->clickhouse->select(<<<SQL
+            SELECT
+                day,
+                sumMerge(published) AS published,
+                sumMerge(failed)    AS failed,
+                round(avgMerge(avg_duration)) AS avg_duration_ms
+            FROM xpost_daily_stats
+            WHERE team_id = :team_id
+              AND day BETWEEN :from AND :to
+              {$filter}
+            GROUP BY day
+            ORDER BY day
+        SQL, array_filter([
+            'team_id' => $teamId,
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
+            'post_id' => $postId,
+        ], static fn ($v) => $v !== null));
+
+        return $rows;
+    }
+
+    /** Top failure reasons, so an operator can see what is actually breaking. */
+    public function failureBreakdown(Carbon $from, Carbon $to, int $limit = 10): array
+    {
+        $teamId = TeamContext::id() ?? 0;
+
+        if (! $this->clickhouse->enabled()) {
+            return PostTarget::query()
+                ->where('status', TargetStatus::Failed->value)
+                ->whereBetween('updated_at', [$from, $to])
+                ->selectRaw('error_code, COUNT(*) as total')
+                ->groupBy('error_code')
+                ->orderByDesc('total')
+                ->limit($limit)
+                ->get()
+                ->map(fn ($row) => ['error_code' => $row->error_code, 'total' => (int) $row->total])
+                ->all();
+        }
+
+        return $this->clickhouse->select(<<<'SQL'
+            SELECT error_code, count() AS total
+            FROM xpost_publish_events
+            WHERE team_id = :team_id
+              AND status = 'failed'
+              AND event_time BETWEEN :from AND :to
+            GROUP BY error_code
+            ORDER BY total DESC
+            LIMIT :limit
+        SQL, [
+            'team_id' => $teamId,
+            'from' => $from->toDateTimeString(),
+            'to' => $to->toDateTimeString(),
+            'limit' => $limit,
+        ]);
+    }
+
+    /** Engagement for one post, summed across every account that carried it. */
+    public function postEngagement(int $postId): array
+    {
+        if (! $this->clickhouse->enabled()) {
+            return [];
+        }
+
+        $rows = $this->clickhouse->select(<<<'SQL'
+            SELECT
+                sum(impressions)         AS impressions,
+                sum(likes)               AS likes,
+                sum(retweets)            AS retweets,
+                sum(replies)             AS replies,
+                sum(quotes)              AS quotes,
+                sum(bookmarks)           AS bookmarks,
+                sum(url_link_clicks)     AS url_link_clicks,
+                sum(user_profile_clicks) AS user_profile_clicks,
+                sum(engagements)         AS engagements
+            FROM (
+                SELECT * FROM xpost_tweet_metrics
+                WHERE team_id = :team_id AND post_id = :post_id
+                ORDER BY snapshot_time DESC
+                LIMIT 1 BY tweet_id
+            )
+        SQL, ['team_id' => TeamContext::id() ?? 0, 'post_id' => $postId]);
+
+        return $rows[0] ?? [];
+    }
+
+    /** Which accounts actually perform, ranked by engagement rate. */
+    public function topAccounts(Carbon $from, Carbon $to, int $limit = 20): array
+    {
+        if (! $this->clickhouse->enabled()) {
+            return [];
+        }
+
+        return $this->clickhouse->select(<<<'SQL'
+            SELECT
+                account_id,
+                count(DISTINCT tweet_id) AS posts,
+                sum(impressions)         AS impressions,
+                sum(engagements)         AS engagements,
+                if(sum(impressions) = 0, 0,
+                   round(sum(engagements) / sum(impressions) * 100, 2)) AS engagement_rate
+            FROM xpost_tweet_metrics
+            WHERE team_id = :team_id AND snapshot_time BETWEEN :from AND :to
+            GROUP BY account_id
+            ORDER BY engagements DESC
+            LIMIT :limit
+        SQL, [
+            'team_id' => TeamContext::id() ?? 0,
+            'from' => $from->toDateTimeString(),
+            'to' => $to->toDateTimeString(),
+            'limit' => $limit,
+        ]);
+    }
+
+    private function dailyVolumeFromMysql(Carbon $from, Carbon $to, ?int $postId): array
+    {
+        return PostTarget::query()
+            ->whereBetween('updated_at', [$from, $to])
+            ->when($postId, fn ($q, $id) => $q->where('post_id', $id))
+            ->selectRaw('DATE(updated_at) as day')
+            ->selectRaw("SUM(status = 'published') as published")
+            ->selectRaw("SUM(status = 'failed') as failed")
+            ->selectRaw('ROUND(AVG(duration_ms)) as avg_duration_ms')
+            ->groupBy('day')
+            ->orderBy('day')
+            ->get()
+            ->map(static fn ($row): array => [
+                'day' => (string) $row->day,
+                'published' => (int) $row->published,
+                'failed' => (int) $row->failed,
+                'avg_duration_ms' => (int) $row->avg_duration_ms,
+            ])
+            ->all();
+    }
+}

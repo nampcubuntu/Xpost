@@ -3,71 +3,38 @@
 Hướng dẫn cho một node duy nhất chạy web + worker. Phần cuối nói về cách tách ra
 nhiều node khi cần.
 
-## Đường tắt
-
-Hai script gói lại toàn bộ phần dưới. Đọc mục 0 trước — repo private nên bước
-clone sẽ hỏng nếu chưa có deploy key.
-
-```bash
-# Lần đầu, trên server trắng
-sudo DOMAIN=xposter.zenomedia.co REPO=git@github.com:nampcubuntu/Xpost.git \
-     bash bin/server-bootstrap.sh
-sudo -u www-data bash /var/www/xpost/bin/deploy.sh --first-run
-
-# Mỗi lần deploy sau đó
-sudo -u www-data bash /var/www/xpost/bin/deploy.sh
-```
-
-Phần còn lại của tài liệu giải thích từng bước script làm gì, và là thứ cần đọc
-khi có gì đó hỏng.
-
----
-
-## 0. Deploy key cho repo private
-
-Server phải tự clone được, mà không được cầm khoá cá nhân của bạn. Deploy key là
-khoá chỉ đọc, chỉ dùng cho đúng một repo:
-
-```bash
-# Trên server
-sudo -u www-data ssh-keygen -t ed25519 -f /var/www/.ssh/xpost_deploy -N "" \
-     -C "xpost-deploy@$(hostname)"
-sudo -u www-data cat /var/www/.ssh/xpost_deploy.pub
-```
-
-Dán nội dung `.pub` vào **GitHub → repo Xpost → Settings → Deploy keys → Add
-deploy key**. Không tích "Allow write access": server chỉ cần đọc.
-
-Rồi trỏ SSH tới khoá đó:
-
-```bash
-sudo -u www-data tee /var/www/.ssh/config <<'EOF'
-Host github.com
-    IdentityFile /var/www/.ssh/xpost_deploy
-    IdentitiesOnly yes
-EOF
-sudo -u www-data chmod 600 /var/www/.ssh/config
-sudo -u www-data ssh -T git@github.com   # phải chào đúng tên repo
-```
-
-Deploy key hơn Personal Access Token ở chỗ phạm vi hẹp hơn hẳn: mất khoá thì
-người lấy được chỉ đọc được đúng repo này, không đụng tới tài khoản GitHub.
-
 ---
 
 ## 1. Gói hệ thống
 
+Ubuntu 26.04 (`resolute`) đóng gói sẵn PHP 8.5 trong kho chính thức — **không cần
+PPA**. Kiểm tra trước:
+
 ```bash
 sudo apt update
-sudo apt install -y software-properties-common
-sudo add-apt-repository -y ppa:ondrej/php
-sudo apt update
+apt-cache policy php8.5-cli      # có kết quả = dùng luôn kho Ubuntu
+```
 
+```bash
 sudo apt install -y \
   php8.5-cli php8.5-fpm php8.5-mysql php8.5-redis php8.5-mbstring \
   php8.5-xml php8.5-curl php8.5-zip php8.5-gd php8.5-bcmath php8.5-intl \
   nginx mysql-server redis-server supervisor git unzip
 ```
+
+> **Đừng thêm `ppa:ondrej/php` trên 26.04.** PPA đó chưa build cho `resolute`,
+> `apt update` sẽ báo `404 Not Found ... does not have a Release file` mỗi lần
+> chạy. Nếu đã lỡ thêm:
+>
+> ```bash
+> sudo add-apt-repository --remove ppa:ondrej/php
+> sudo rm -f /etc/apt/sources.list.d/ondrej-*.sources \
+>            /etc/apt/sources.list.d/ondrej-*.list
+> sudo apt update
+> ```
+>
+> PPA chỉ cần cho bản Ubuntu cũ hơn (22.04, 24.04) vốn không có PHP 8.5.
+> `bin/server-bootstrap.sh` đã tự kiểm tra điều này trước khi đụng tới PPA.
 
 `php8.5-redis` (phpredis) là extension C — nhanh hơn hẳn predis dưới tải hàng đợi.
 Sau khi cài, đổi `REDIS_CLIENT=phpredis` trong `.env`.

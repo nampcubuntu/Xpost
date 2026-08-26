@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import api, { validationErrors } from '../lib/api';
 
 const apps = ref([]);
@@ -23,6 +23,11 @@ const blank = () => ({
 });
 
 const form = reactive(blank());
+
+/** Errors on fields that have no message slot of their own in the form. */
+const otherErrors = computed(() => Object.entries(errors.value)
+    .filter(([field]) => !['name', 'tier'].includes(field))
+    .map(([, message]) => message));
 
 async function load() {
     loading.value = true;
@@ -71,6 +76,18 @@ async function save() {
         await load();
     } catch (error) {
         errors.value = validationErrors(error);
+
+        /*
+         * A 500 produces no validation bag at all, and the form only renders an
+         * error next to a couple of fields -- so a server-side failure looked
+         * exactly like the Save button doing nothing. Always surface something.
+         */
+        flash.value = {
+            type: 'error',
+            message: Object.values(errors.value)[0]
+                ?? error.response?.data?.message
+                ?? 'Không lưu được. Xem storage/logs/laravel.log.',
+        };
     } finally {
         busy.value = false;
     }
@@ -131,7 +148,16 @@ async function connect(app) {
                     <option value="pro">Pro</option>
                     <option value="enterprise">Enterprise</option>
                 </select>
+                <span v-if="errors.tier" class="text-xs text-red-600">{{ errors.tier }}</span>
             </label>
+
+            <!--
+                Anything the server rejected that has no field of its own. Without
+                this a rule on callback_url or max_accounts failed silently.
+            -->
+            <div v-if="otherErrors.length" class="sm:col-span-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                <p v-for="message in otherErrors" :key="message">{{ message }}</p>
+            </div>
 
             <label class="space-y-1">
                 <span class="xp-label">OAuth 2.0 Client ID</span>

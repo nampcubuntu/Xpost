@@ -60,6 +60,22 @@ class PostResource extends JsonResource
                 'name' => $this->author->name,
             ]),
             'media' => PostMediaResource::collection($this->whenLoaded('media')),
+
+            /*
+             * One account standing in for the fan-out, so a list row can show
+             * who posted and link to the live post. `accounts` alongside it is
+             * what stops that reading as "this went to one account".
+             */
+            'sample' => $this->whenLoaded('sampleTarget', fn () => $this->sampleTarget ? [
+                'x_tweet_id' => $this->sampleTarget->x_tweet_id,
+                'permalink' => $this->sampleTarget->permalink,
+                'published_at' => $this->sampleTarget->published_at?->toIso8601String(),
+                'account' => $this->sampleTarget->account ? [
+                    'username' => $this->sampleTarget->account->username,
+                    'name' => $this->sampleTarget->account->name,
+                    'avatar_url' => $this->sampleTarget->account->avatar_url,
+                ] : null,
+            ] : null),
             'variants' => $this->whenLoaded('variants', fn () => $this->variants->map(fn ($v) => [
                 'id' => $v->id,
                 'body' => $v->body,

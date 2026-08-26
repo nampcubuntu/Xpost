@@ -31,8 +31,12 @@ class PostController extends Controller
         $this->authorize('viewAny', Post::class);
 
         $posts = Post::query()
-            ->with(['campaign', 'author', 'media'])
+            ->with([
+                'campaign', 'author', 'media',
+                'sampleTarget.account:id,username,name,avatar_url',
+            ])
             ->status($request->query('status'))
+            ->type($request->query('type'))
             ->when($request->query('campaign_id'), fn ($q, $id) => $q->where('campaign_id', $id))
             ->when($request->query('search'), fn ($q, $term) => $q->where(
                 fn ($w) => $w->where('name', 'like', "%{$term}%")->orWhere('body', 'like', "%{$term}%")

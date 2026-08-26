@@ -154,15 +154,48 @@ async function rebalance() {
     }
 }
 
+/**
+ * Apps that can actually run an OAuth 2.0 flow, emptiest first.
+ *
+ * This used to just take apps[0], and the list arrives sorted by name -- so the
+ * button reliably picked whichever app happened to sort first rather than the
+ * one the account should go to. Connecting through an app whose client_id is
+ * wrong fails at X with an error that says nothing about which app was used.
+ */
+const connectableApps = computed(() => apps.value
+    .filter((app) => app.has_oauth2)
+    .sort((a, b) => (a.assigned_count / a.max_accounts) - (b.assigned_count / b.max_accounts)));
+
+const connectVia = ref(null);
+
+watch(connectableApps, (list) => {
+    connectVia.value ??= list[0]?.id ?? null;
+}, { immediate: true });
+
 async function connectAccount() {
-    if (!apps.value.length) {
-        flash.value = { type: 'error', message: 'Hãy tạo ít nhất một X App trước.' };
+    if (!connectVia.value) {
+        flash.value = {
+            type: 'error',
+            message: apps.value.length
+                ? 'Không có X App nào đủ khoá OAuth 2.0. Điền Client ID và Client Secret ở trang X Apps.'
+                : 'Hãy tạo ít nhất một X App trước.',
+        };
 
         return;
     }
 
-    const { data } = await api.get(`apps/${apps.value[0].id}/authorize-url`);
-    window.location.href = data.url;
+    const app = apps.value.find((a) => a.id === connectVia.value);
+
+    try {
+        const { data } = await api.get(`apps/${connectVia.value}/authorize-url`);
+        window.location.href = data.url;
+    } catch (error) {
+        flash.value = {
+            type: 'error',
+            message: `Không mở được xác thực qua "${app?.name}": `
+                + (error.response?.data?.message ?? 'lỗi không rõ'),
+        };
+    }
 }
 </script>
 
@@ -170,8 +203,20 @@ async function connectAccount() {
     <div class="px-5 py-5 lg:px-8 lg:py-6">
         <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
             <h1 class="text-xl font-semibold">Tài khoản X</h1>
-            <div class="flex gap-2">
+            <div class="flex flex-wrap items-center gap-2">
                 <button class="xp-btn-ghost" :disabled="busy" @click="rebalance">Cân bằng pool</button>
+
+                <!--
+                    Which app the account is authorised through decides which
+                    credentials X sees and which app's quota it spends. Worth
+                    being explicit about rather than picking one silently.
+                -->
+                <select v-if="connectableApps.length > 1" v-model="connectVia" class="xp-field max-w-[200px] py-2">
+                    <option v-for="app in connectableApps" :key="app.id" :value="app.id">
+                        qua {{ app.name }} ({{ app.assigned_count }}/{{ app.max_accounts }})
+                    </option>
+                </select>
+
                 <button class="xp-btn-primary" @click="connectAccount">+ Kết nối tài khoản</button>
             </div>
         </div>

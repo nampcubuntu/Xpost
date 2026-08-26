@@ -105,11 +105,7 @@ final class ComposerService
             'is_ai_generated', 'promoted_only', 'variant_strategy',
             'schedule_mode', 'timezone', 'scheduled_at', 'window_ends_at',
             'jitter_seconds', 'per_minute_cap', 'audience',
-        ])) + [
-            // "Promoted only" is what nullcast means on the wire; keeping both
-            // columns lets the UI stay in the advertiser's vocabulary.
-            'nullcast' => (bool) ($data['promoted_only'] ?? false),
-        ];
+        ]));
     }
 
     private function syncVariants(Post $post, array $variants): void

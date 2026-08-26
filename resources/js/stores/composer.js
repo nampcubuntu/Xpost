@@ -14,7 +14,15 @@ function blankPost() {
         headline: '',
         app_store_url: '',
         is_ai_generated: false,
-        promoted_only: true,
+        /*
+         * Off by default, unlike X Ads Manager, which is an ads tool and starts
+         * it on. A promoted-only post is created and live but never appears on
+         * the author's timeline, so leaving it on by default would let a run of
+         * 5,000 posts finish green with nobody able to see any of them. A post
+         * that appears when it should not is deletable; one that silently never
+         * appears goes unnoticed.
+         */
+        promoted_only: false,
         variant_strategy: 'same',
         variants: [],
         media_ids: [],

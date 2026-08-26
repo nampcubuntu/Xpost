@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Post extends Model
@@ -28,7 +29,7 @@ class Post extends Model
     protected $fillable = [
         'team_id', 'campaign_id', 'created_by', 'name', 'body', 'reply_settings',
         'destination_type', 'website_url', 'headline', 'app_store_url', 'app_country_code',
-        'is_ai_generated', 'promoted_only', 'nullcast', 'variant_strategy',
+        'is_ai_generated', 'promoted_only', 'variant_strategy',
         'schedule_mode', 'timezone', 'scheduled_at', 'window_ends_at',
         'jitter_seconds', 'per_minute_cap', 'audience', 'settings',
     ];
@@ -43,7 +44,6 @@ class Post extends Model
             'schedule_mode' => ScheduleMode::class,
             'is_ai_generated' => 'boolean',
             'promoted_only' => 'boolean',
-            'nullcast' => 'boolean',
             'audience' => 'array',
             'settings' => 'array',
             'scheduled_at' => 'datetime',
@@ -113,5 +113,34 @@ class Post extends Model
     public function scopeStatus(Builder $query, PostStatus|string|null $status): Builder
     {
         return $query->when($status, fn (Builder $q, $s) => $q->where('status', $s instanceof PostStatus ? $s->value : $s));
+    }
+
+    /**
+     * Organic or promoted-only, the way X Ads Manager splits its post list.
+     *
+     * A promoted-only post is live and has a real id, it just never appears on
+     * the author's timeline -- so telling the two apart matters more than the
+     * publishing status does when you are looking for something.
+     */
+    public function scopeType(Builder $query, ?string $type): Builder
+    {
+        return match ($type) {
+            'promoted' => $query->where('promoted_only', true),
+            'organic' => $query->where('promoted_only', false),
+            default => $query,
+        };
+    }
+
+    /**
+     * One target standing in for the whole fan-out, for list views.
+     *
+     * A post here goes to many accounts, unlike Ads Manager where a post is one
+     * account -- so the list shows the earliest target plus a count rather than
+     * pretending there is a single author. Loaded as a relation so 25 rows cost
+     * one extra query, not 25.
+     */
+    public function sampleTarget(): HasOne
+    {
+        return $this->hasOne(PostTarget::class)->ofMany('id', 'min');
     }
 }

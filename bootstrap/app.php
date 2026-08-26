@@ -17,6 +17,25 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        /*
+         * Anything terminating TLS in front of us -- a Cloudflare tunnel, a load
+         * balancer, ngrok/localhost.run during local OAuth testing -- forwards
+         * plain HTTP inwards. Without trusting the forwarded headers Laravel
+         * believes the request was http and renders every asset URL as
+         * `http://…`, which the browser then blocks as mixed content on an
+         * https page. The symptom is a completely blank SPA.
+         *
+         * `*` because the proxy's address is not knowable ahead of time for any
+         * of those. That is the standard trade-off: only ever run this behind a
+         * proxy that overwrites X-Forwarded-*, never on a directly exposed port,
+         * or a client could spoof its own scheme and address.
+         */
+        $middleware->trustProxies(at: '*', headers: Request::HEADER_X_FORWARDED_FOR
+            | Request::HEADER_X_FORWARDED_HOST
+            | Request::HEADER_X_FORWARDED_PORT
+            | Request::HEADER_X_FORWARDED_PROTO
+            | Request::HEADER_X_FORWARDED_AWS_ELB);
+
         $middleware->api(prepend: [
             EnsureFrontendRequestsAreStateful::class,
         ]);

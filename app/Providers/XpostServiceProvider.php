@@ -48,7 +48,21 @@ class XpostServiceProvider extends ServiceProvider
         $this->configurePolicies();
         $this->configureRateLimiting();
 
-        if ($this->app->environment('production')) {
+        /*
+         * Keyed off APP_URL rather than the environment.
+         *
+         * A TLS terminator in front of us forwards plain HTTP inwards, so the
+         * request looks like http and every generated asset URL comes out as
+         * `http://…` -- which the browser then blocks as mixed content on an
+         * https page, leaving a completely blank SPA. Trusting X-Forwarded-Proto
+         * fixes that behind nginx or Cloudflare, but not behind every tunnel:
+         * localhost.run sends no X-Forwarded-* headers at all, only a rewritten
+         * Host. APP_URL is the one thing that always knows the truth.
+         *
+         * Checking `environment('production')` missed exactly that case, which
+         * is when local OAuth testing needs a public https URL.
+         */
+        if (str_starts_with((string) config('app.url'), 'https://')) {
             URL::forceScheme('https');
         }
     }

@@ -80,6 +80,7 @@ Route::prefix('v1')->group(function (): void {
             // ----- Infrastructure -----
             Route::apiResource('apps', XAppController::class)->parameters(['apps' => 'xApp']);
             Route::get('apps/{xApp}/authorize-url', [XAppController::class, 'authorizeUrl']);
+            Route::get('apps/{xApp}/authorize-url-oauth1', [XAppController::class, 'authorizeUrlOAuth1']);
 
             Route::apiResource('proxies', ProxyController::class)->except(['show']);
             Route::post('proxies/{proxy}/check', [ProxyController::class, 'check']);

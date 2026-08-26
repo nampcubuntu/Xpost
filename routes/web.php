@@ -20,6 +20,12 @@ Route::middleware(['auth', 'team'])->group(function (): void {
     Route::get('x/oauth/{xApp}/redirect', [XOAuthController::class, 'redirect'])->name('x.oauth.redirect');
 
     /*
+     * The OAuth 1.0a variant. Only accounts connected this way can mint their
+     * own cards, because the Ads API refuses an OAuth 2.0 bearer outright.
+     */
+    Route::get('x/oauth1/{xApp}/redirect', [XOAuthController::class, 'redirectOAuth1'])->name('x.oauth1.redirect');
+
+    /*
      * Media is served through the app rather than from a public disk.
      *
      * Uploads land on the private disk, so Storage::url() produced a path the

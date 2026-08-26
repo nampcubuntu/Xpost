@@ -8,6 +8,7 @@ use App\Enums\XAppTier;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\XAppResource;
 use App\Models\XApp;
+use App\Services\X\XOAuth1Service;
 use App\Services\X\XOAuth2Service;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -94,6 +95,27 @@ class XAppController extends Controller
                 $xApp,
                 $request->user()->id,
                 $request->query('redirect_to'),
+            ),
+        ]);
+    }
+
+    /**
+     * The OAuth 1.0a variant.
+     *
+     * Worth a separate button rather than a silent upgrade: it is the only flow
+     * the Ads API accepts, so it is the only way an account can mint its own
+     * card -- and it costs the account holder an extra consent screen.
+     */
+    public function authorizeUrlOAuth1(Request $request, XApp $xApp, XOAuth1Service $oauth): JsonResponse
+    {
+        $this->authorize('update', $xApp);
+
+        return response()->json([
+            'url' => $oauth->authorizationUrl(
+                $xApp,
+                $request->user()->id,
+                $request->query('redirect_to'),
+                forceLogin: $request->query('force_login') !== '0',
             ),
         ]);
     }

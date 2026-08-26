@@ -33,9 +33,17 @@ final class XOAuth1Signer
             'oauth_nonce' => bin2hex(random_bytes(16)),
             'oauth_signature_method' => 'HMAC-SHA1',
             'oauth_timestamp' => (string) time(),
-            'oauth_token' => $this->token,
             'oauth_version' => '1.0',
         ], $overrides);
+
+        /*
+         * The first leg of a 3-legged handshake has no token yet, and X rejects
+         * an empty oauth_token outright rather than ignoring it. Everywhere
+         * else the token is present and must be signed.
+         */
+        if ($this->token !== '') {
+            $oauth['oauth_token'] = $this->token;
+        }
 
         $oauth['oauth_signature'] = $this->sign($method, $url, array_merge($oauth, $params));
 

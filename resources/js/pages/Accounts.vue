@@ -172,12 +172,26 @@ watch(connectableApps, (list) => {
     connectVia.value ??= list[0]?.id ?? null;
 }, { immediate: true });
 
-async function connectAccount() {
-    if (!connectVia.value) {
+/**
+ * Only an OAuth 1.0a account can mint its own card.
+ *
+ * The Ads API refuses an OAuth 2.0 bearer outright, and minting is what puts
+ * the tappable "From <domain>" row under a video. So this is the flow to use
+ * for an account that has its own ads account -- at the cost of one more
+ * consent screen for whoever holds it.
+ */
+const oauth1Apps = computed(() => apps.value.filter((app) => app.has_oauth1));
+
+async function connectAccount(flow = 'oauth2') {
+    const usable = flow === 'oauth1' ? oauth1Apps.value : connectableApps.value;
+
+    if (!connectVia.value || !usable.some((a) => a.id === connectVia.value)) {
         flash.value = {
             type: 'error',
             message: apps.value.length
-                ? 'Không có X App nào đủ khoá OAuth 2.0. Điền Client ID và Client Secret ở trang X Apps.'
+                ? (flow === 'oauth1'
+                    ? 'App đang chọn thiếu Consumer Key/Secret nên không chạy được OAuth 1.0a. Điền ở trang X Apps.'
+                    : 'Không có X App nào đủ khoá OAuth 2.0. Điền Client ID và Client Secret ở trang X Apps.')
                 : 'Hãy tạo ít nhất một X App trước.',
         };
 
@@ -185,9 +199,10 @@ async function connectAccount() {
     }
 
     const app = apps.value.find((a) => a.id === connectVia.value);
+    const endpoint = flow === 'oauth1' ? 'authorize-url-oauth1' : 'authorize-url';
 
     try {
-        const { data } = await api.get(`apps/${connectVia.value}/authorize-url`);
+        const { data } = await api.get(`apps/${connectVia.value}/${endpoint}`);
         window.location.href = data.url;
     } catch (error) {
         flash.value = {
@@ -217,7 +232,21 @@ async function connectAccount() {
                     </option>
                 </select>
 
-                <button class="xp-btn-primary" @click="connectAccount">+ Kết nối tài khoản</button>
+                <button class="xp-btn-primary" @click="connectAccount('oauth2')">+ Kết nối tài khoản</button>
+
+                <!--
+                    Separate button, not a checkbox: OAuth 1.0a is what an
+                    account needs to mint its own card, and picking the wrong
+                    flow is only discovered much later when a publish fails.
+                -->
+                <button
+                    v-if="oauth1Apps.length"
+                    class="xp-btn-ghost"
+                    title="Bắt buộc nếu tài khoản này có Ads account và cần tự tạo card"
+                    @click="connectAccount('oauth1')"
+                >
+                    + Kết nối (OAuth 1.0a)
+                </button>
             </div>
         </div>
 

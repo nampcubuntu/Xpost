@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 #
-# Deploy the current main branch. Run as www-data:
+# Deploy the current branch. Run as www-data:
 #
 #   sudo -u www-data bash /var/www/xpost/bin/deploy.sh
 #   sudo -u www-data bash /var/www/xpost/bin/deploy.sh --first-run
 #
 # --first-run skips the `git pull` and the maintenance window, for a box that
 # bin/server-bootstrap.sh has just cloned into.
+#
+# Composer and the frontend build are skipped when nothing they depend on
+# changed. On a typical push that touches only PHP files this turns a two
+# minute deploy into about fifteen seconds, which is what makes the
+# auto-deploy loop in bin/auto-deploy.sh usable.
 #
 set -euo pipefail
 
@@ -29,25 +34,59 @@ cleanup() {
 }
 trap cleanup EXIT
 
+BEFORE=""
+
 if [[ $FIRST_RUN == false ]]; then
-    say "Bật chế độ bảo trì"
-    $PHP artisan down --retry=60
+    BEFORE=$(git rev-parse HEAD)
 
     say "Kéo mã mới"
     git pull --ff-only
+
+    AFTER=$(git rev-parse HEAD)
+
+    if [[ $BEFORE == "$AFTER" ]]; then
+        say "Không có commit mới — không làm gì"
+        exit 0
+    fi
+
+    echo "  ${BEFORE:0:7} → ${AFTER:0:7}"
+    git --no-pager log --oneline "$BEFORE..$AFTER" | head -10
+
+    say "Bật chế độ bảo trì"
+    $PHP artisan down --retry=60
 fi
 
-say "Dependency PHP"
-composer install --no-dev --optimize-autoloader --no-interaction
+# True when any path given changed between the two commits, or on a first run.
+changed() {
+    [[ -z $BEFORE ]] && return 0
+    git diff --name-only "$BEFORE" HEAD -- "$@" | grep -q .
+}
 
-say "Build frontend"
-npm ci --silent
-npm run build
+if changed composer.lock composer.json; then
+    say "Dependency PHP"
+    composer install --no-dev --optimize-autoloader --no-interaction
+else
+    echo "→ composer.lock không đổi, bỏ qua composer install"
+fi
 
-say "Migrate"
-# --force because production migrations are never interactive; --isolated so a
-# second deploy running concurrently does not migrate the same database twice.
-$PHP artisan migrate --force --isolated
+# vite.config.js and resources/ matter as much as the lockfile: a changed Vue
+# component with an unchanged package-lock still needs a rebuild.
+if changed package-lock.json package.json vite.config.js resources/; then
+    say "Build frontend"
+    changed package-lock.json package.json && npm ci --silent
+    npm run build
+else
+    echo "→ frontend không đổi, bỏ qua npm build"
+fi
+
+if changed database/migrations/; then
+    say "Migrate"
+    # --force because production migrations are never interactive; --isolated so
+    # a second deploy running concurrently does not migrate the same database twice.
+    $PHP artisan migrate --force --isolated
+else
+    echo "→ không có migration mới"
+fi
 
 if [[ $FIRST_RUN == true ]]; then
     say "Storage link"
@@ -73,8 +112,4 @@ if [[ $FIRST_RUN == false ]]; then
     $PHP artisan up
 fi
 
-say "Kiểm tra"
-$PHP artisan about --only=environment,drivers
-echo
-echo "Horizon:  $($PHP artisan horizon:status)"
-echo "Xong."
+say "Đã deploy $(git rev-parse --short HEAD)"

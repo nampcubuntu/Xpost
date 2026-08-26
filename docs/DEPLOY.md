@@ -3,6 +3,114 @@
 Hướng dẫn cho một node duy nhất chạy web + worker. Phần cuối nói về cách tách ra
 nhiều node khi cần.
 
+## Luồng từ máy bạn tới server
+
+```
+local          code ở đây, 95% thời gian — dev.bat + Vite HMR, ~100ms mỗi lần sửa
+  │ git push main
+  ▼
+CI             .github/workflows/ci.yml — Pint, PHPUnit, npm build
+  │ chỉ khi xanh
+  ▼
+staging        CI fast-forward nhánh `staging`. Server LAN poll mỗi phút và
+  │            tự deploy. Xem ở http://<ip-lan>
+  │ duyệt tay
+  ▼
+production     deploy theo tag, không bao giờ tự động
+```
+
+**Không code trên server.** Server để kiểm chứng, không phải để lặp: một vòng
+deploy mất 15 giây tới 2 phút, còn Vite HMR ở local mất 100ms.
+
+Khi cần thứ chỉ tồn tại trên Internet — callback OAuth của X, webhook — vẫn code
+ở local, chỉ mở tunnel ra:
+
+```bash
+ssh -R 80:localhost:8000 nokey@localhost.run
+```
+
+### Vì sao staging theo dõi `staging` chứ không phải `main`
+
+Poll thẳng `main` thì server kéo commit về ngay lúc CI còn đang chạy, và "hỏng
+thì chặn" mất tác dụng. Thay vào đó CI đẩy nhánh `staging` lên **sau khi** job
+test pass, nên chỉ commit xanh mới tới được server.
+
+Rẻ hơn việc cấp GitHub token cho server để nó tự tra trạng thái CI, và không cần
+cổng vào nào — server LAN sau NAT vẫn chạy được. Đổi sang webhook chỉ đáng làm
+khi server đã công khai ra Internet.
+
+### Lên production
+
+Production **không** bật auto-deploy:
+
+```bash
+sudo AUTODEPLOY=no DOMAIN=… REPO=… bash bin/server-bootstrap.sh
+```
+
+Deploy một phiên bản cụ thể, sau khi đã xem nó chạy ổn trên staging:
+
+```bash
+# máy local
+git tag -a v1.2.0 -m "…" && git push origin v1.2.0
+
+# server production
+sudo -u www-data git -C /var/www/xpost fetch --tags
+sudo -u www-data git -C /var/www/xpost checkout v1.2.0
+sudo -u www-data bash /var/www/xpost/bin/deploy.sh
+```
+
+---
+
+## Đường tắt
+
+Hai script gói lại toàn bộ phần dưới. Đọc mục 0 trước — repo private nên bước
+clone sẽ hỏng nếu chưa có deploy key.
+
+```bash
+# Lần đầu, trên server trắng
+sudo DOMAIN=xposter.zenomedia.co REPO=git@github.com:nampcubuntu/Xpost.git \
+     bash bin/server-bootstrap.sh
+sudo -u www-data bash /var/www/xpost/bin/deploy.sh --first-run
+
+# Mỗi lần deploy sau đó
+sudo -u www-data bash /var/www/xpost/bin/deploy.sh
+```
+
+Phần còn lại của tài liệu giải thích từng bước script làm gì, và là thứ cần đọc
+khi có gì đó hỏng.
+
+---
+
+## 0. Deploy key cho repo private
+
+Server phải tự clone được, mà không được cầm khoá cá nhân của bạn. Deploy key là
+khoá chỉ đọc, chỉ dùng cho đúng một repo:
+
+```bash
+# Trên server
+sudo -u www-data ssh-keygen -t ed25519 -f /var/www/.ssh/xpost_deploy -N "" \
+     -C "xpost-deploy@$(hostname)"
+sudo -u www-data cat /var/www/.ssh/xpost_deploy.pub
+```
+
+Dán nội dung `.pub` vào **GitHub → repo Xpost → Settings → Deploy keys → Add
+deploy key**. Không tích "Allow write access": server chỉ cần đọc.
+
+Rồi trỏ SSH tới khoá đó:
+
+```bash
+sudo -u www-data tee /var/www/.ssh/config <<'EOF'
+Host github.com
+    IdentityFile /var/www/.ssh/xpost_deploy
+    IdentitiesOnly yes
+EOF
+sudo -u www-data chmod 600 /var/www/.ssh/config
+sudo -u www-data ssh -T git@github.com   # phải chào đúng tên repo
+```
+
+Deploy key hơn Personal Access Token ở chỗ phạm vi hẹp hơn hẳn: mất khoá thì
+người lấy được chỉ đọc được đúng repo này, không đụng tới tài khoản GitHub.
+
 ---
 
 ## 1. Gói hệ thống

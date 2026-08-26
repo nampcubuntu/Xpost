@@ -1,0 +1,23 @@
+[Unit]
+Description=Xpost — deploy nhánh staging khi có commit mới
+# Không chạy khi mất mạng: git ls-remote sẽ chỉ timeout rồi báo lỗi giả.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/xpost
+ExecStart=/bin/bash /var/www/xpost/bin/auto-deploy.sh
+
+# Composer, npm build và migrate cộng lại có thể vượt vài phút trên máy yếu.
+# Hết giờ giữa chừng còn tệ hơn deploy chậm, nên để rộng tay.
+TimeoutStartSec=900
+
+# journalctl -u xpost-autodeploy là nơi xem lịch sử deploy.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

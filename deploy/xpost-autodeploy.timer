@@ -1,0 +1,19 @@
+[Unit]
+Description=Kiểm tra commit mới trên nhánh staging mỗi phút
+
+[Timer]
+# Chờ một phút sau khi máy khởi động: nginx, MySQL và Redis cần lên trước khi
+# một lần deploy có thể chạy kiểm tra sức khoẻ.
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+# Không dồn các lượt đã lỡ khi máy tắt. Chỉ commit mới nhất là đáng deploy --
+# chạy bù mười lượt của mười commit cũ là mười lần build vô ích.
+Persistent=false
+
+# Lệch ngẫu nhiên tới 20 giây, để nhiều máy cùng poll không đập vào GitHub
+# cùng một giây.
+RandomizedDelaySec=20
+
+[Install]
+WantedBy=timers.target

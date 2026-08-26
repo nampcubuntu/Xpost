@@ -15,6 +15,9 @@ set -euo pipefail
 DOMAIN="${DOMAIN:?Đặt DOMAIN, ví dụ DOMAIN=xposter.zenomedia.co}"
 REPO="${REPO:?Đặt REPO, ví dụ REPO=git@github.com:nampcubuntu/Xpost.git}"
 APP_DIR="${APP_DIR:-/var/www/xpost}"
+# Staging tracks `staging` (advanced by CI only on green); a production box
+# would be pointed at a tag instead.
+BRANCH="${BRANCH:-staging}"
 PHP_VERSION="${PHP_VERSION:-8.5}"
 DB_NAME="${DB_NAME:-xpost}"
 DB_USER="${DB_USER:-xpost}"
@@ -134,6 +137,18 @@ if [[ ! -d "$APP_DIR/.git" ]]; then
     git clone "$REPO" "$APP_DIR"
 fi
 
+# A staging box tracks `staging`, which CI only advances once tests pass. That
+# branch does not exist until the first green build, so fall back to whatever
+# was cloned rather than failing the whole bootstrap over it.
+if git -C "$APP_DIR" ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+    git -C "$APP_DIR" fetch origin "$BRANCH"
+    git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+    echo "Đang bám nhánh ${BRANCH}."
+else
+    echo "Nhánh '${BRANCH}' chưa tồn tại — CI sẽ tạo sau lần build xanh đầu tiên."
+    echo "Tạm bám $(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD)."
+fi
+
 chown -R www-data:www-data "$APP_DIR"
 
 # ── 6. .env ─────────────────────────────────────────────────────────────────
@@ -229,6 +244,22 @@ CRON_LINE="* * * * * cd ${APP_DIR} && /usr/bin/php${PHP_VERSION} artisan schedul
 # One line only; everything else lives in routes/console.php.
 ( crontab -u www-data -l 2>/dev/null | grep -v 'artisan schedule:run' ; echo "$CRON_LINE" ) \
     | crontab -u www-data -
+
+# ── 10. Auto-deploy timer ───────────────────────────────────────────────────
+say "Auto-deploy (staging)"
+
+if [[ "${AUTODEPLOY:-yes}" == "yes" ]]; then
+    install -m 644 "${APP_DIR}/deploy/xpost-autodeploy.service" /etc/systemd/system/
+    install -m 644 "${APP_DIR}/deploy/xpost-autodeploy.timer" /etc/systemd/system/
+
+    systemctl daemon-reload
+    systemctl enable --now xpost-autodeploy.timer
+
+    echo "Đang theo dõi nhánh '${BRANCH}', kiểm tra mỗi phút."
+    echo "Nhật ký: journalctl -u xpost-autodeploy -f"
+else
+    echo "Bỏ qua (AUTODEPLOY=no) — production nên deploy tay."
+fi
 
 say "Xong phần hệ thống"
 

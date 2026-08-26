@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Một push mới trên cùng nhánh huỷ lượt chạy cũ — không tốn runner cho commit
+# đã bị thay thế.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & lint
+    runs-on: ubuntu-latest
+
+    services:
+      # Bộ đếm hạn mức và test failover dùng Redis thật, không mock: một Lua
+      # script chạy đúng trên mock nhưng sai trên Redis thật là loại lỗi tệ nhất.
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP 8.5
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          # sqlite3 cho DB test in-memory, intl cho TimezoneGuesser.
+          extensions: mbstring, xml, curl, zip, gd, bcmath, intl, sqlite3
+          coverage: none
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Chuẩn bị .env
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Pint
+        run: vendor/bin/pint --test
+
+      - name: PHPUnit
+        run: php artisan test
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Build thật chứ không chỉ lint: một component Vue hỏng vẫn qua được
+      # eslint nhưng làm trắng cả SPA trên server.
+      - name: Build frontend
+        run: npm run build
+
+  # Chỉ commit xanh mới tới được server. Staging poll nhánh `staging`, và nhánh
+  # này chỉ nhích lên khi job test ở trên đã pass -- rẻ hơn hẳn việc cấp token
+  # GitHub cho server để nó tự tra trạng thái CI.
+  promote-staging:
+    name: Đẩy lên nhánh staging
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: main → staging
+        run: |
+          git push origin "${{ github.sha }}:refs/heads/staging"

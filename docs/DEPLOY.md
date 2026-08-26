@@ -3,6 +3,56 @@
 Hướng dẫn cho một node duy nhất chạy web + worker. Phần cuối nói về cách tách ra
 nhiều node khi cần.
 
+## Đường tắt
+
+Hai script gói lại toàn bộ phần dưới. Đọc mục 0 trước — repo private nên bước
+clone sẽ hỏng nếu chưa có deploy key.
+
+```bash
+# Lần đầu, trên server trắng
+sudo DOMAIN=xposter.zenomedia.co REPO=git@github.com:nampcubuntu/Xpost.git \
+     bash bin/server-bootstrap.sh
+sudo -u www-data bash /var/www/xpost/bin/deploy.sh --first-run
+
+# Mỗi lần deploy sau đó
+sudo -u www-data bash /var/www/xpost/bin/deploy.sh
+```
+
+Phần còn lại của tài liệu giải thích từng bước script làm gì, và là thứ cần đọc
+khi có gì đó hỏng.
+
+---
+
+## 0. Deploy key cho repo private
+
+Server phải tự clone được, mà không được cầm khoá cá nhân của bạn. Deploy key là
+khoá chỉ đọc, chỉ dùng cho đúng một repo:
+
+```bash
+# Trên server
+sudo -u www-data ssh-keygen -t ed25519 -f /var/www/.ssh/xpost_deploy -N "" \
+     -C "xpost-deploy@$(hostname)"
+sudo -u www-data cat /var/www/.ssh/xpost_deploy.pub
+```
+
+Dán nội dung `.pub` vào **GitHub → repo Xpost → Settings → Deploy keys → Add
+deploy key**. Không tích "Allow write access": server chỉ cần đọc.
+
+Rồi trỏ SSH tới khoá đó:
+
+```bash
+sudo -u www-data tee /var/www/.ssh/config <<'EOF'
+Host github.com
+    IdentityFile /var/www/.ssh/xpost_deploy
+    IdentitiesOnly yes
+EOF
+sudo -u www-data chmod 600 /var/www/.ssh/config
+sudo -u www-data ssh -T git@github.com   # phải chào đúng tên repo
+```
+
+Deploy key hơn Personal Access Token ở chỗ phạm vi hẹp hơn hẳn: mất khoá thì
+người lấy được chỉ đọc được đúng repo này, không đụng tới tài khoản GitHub.
+
 ---
 
 ## 1. Gói hệ thống

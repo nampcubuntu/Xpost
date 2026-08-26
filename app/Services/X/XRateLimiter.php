@@ -66,6 +66,20 @@ class XRateLimiter
     }
 
     /**
+     * Hand a reserved app slot back, both windows.
+     *
+     * For the case where the publish is abandoned after the reservation but
+     * before the call to X -- nothing was spent at X, so nothing should be
+     * spent here either. A slot burned on a post that never went out is a slot
+     * some other account needed today.
+     */
+    public function releaseAppSlot(XApp $app): void
+    {
+        $this->refund($this->key('app', $app->id, 'burst'));
+        $this->refund($this->key('app', $app->id, 'day'));
+    }
+
+    /**
      * Reserve one publish slot on this app: short-window smoothing first, then
      * the 24h allowance. A burst slot taken but not usable is handed straight
      * back, so probing a second app costs the first one nothing.

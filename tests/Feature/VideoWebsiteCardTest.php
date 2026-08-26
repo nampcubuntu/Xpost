@@ -12,6 +12,7 @@ use App\Models\PostTarget;
 use App\Models\XAccount;
 use App\Models\XApp;
 use App\Services\Publishing\PostPublisher;
+use App\Services\X\XRateLimiter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
@@ -182,8 +183,70 @@ class VideoWebsiteCardTest extends TestCase
     }
 
     #[Test]
+    public function card_only_fails_an_account_that_cannot_build_one(): void
+    {
+        /*
+         * The point of card_only is that a campaign renders the same wherever
+         * it appears. Publishing a call-to-action version instead would break
+         * that invisibly, on whichever accounts happen to lack an ads account
+         * -- so the target fails and shows up in the failed column.
+         */
+        $this->fakeX();
+        $media = $this->video();
+
+        $target = $this->target($this->adsAccount(['ads_account_id' => null]), [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+        ]);
+
+        $outcome = app(PostPublisher::class)->publish($target->fresh());
+
+        $this->assertTrue($outcome->isFailed());
+        $this->assertSame('card_unavailable', $target->fresh()->error_code);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'api.x.com/2/tweets'));
+    }
+
+    #[Test]
+    public function a_refused_card_hands_its_rate_limit_slots_back(): void
+    {
+        // Nothing was spent at X, so nothing should be spent here: a slot
+        // burned on a post that never went out is one another account needed.
+        $this->fakeX();
+        $media = $this->video();
+        $account = $this->adsAccount(['ads_account_id' => null, 'daily_post_cap' => 50]);
+
+        app(PostPublisher::class)->publish($this->target($account, [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+        ])->fresh());
+
+        $this->assertSame(50, app(XRateLimiter::class)->remainingForAccount($account));
+    }
+
+    #[Test]
+    public function card_only_leaves_a_post_without_media_alone(): void
+    {
+        // There is nothing to build a card from, and refusing to publish a
+        // plain link post would help nobody.
+        $this->fakeX();
+
+        $body = $this->publish($this->target($this->adsAccount(['ads_account_id' => null]), [
+            'rendered_body' => 'Chỉ có link',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [],
+        ]));
+
+        $this->assertSame('Chỉ có link https://twvideo.top/', $body['text']);
+    }
+
+    #[Test]
     public function an_account_without_an_ads_account_falls_back_to_a_call_to_action(): void
     {
+        // The fallback belongs to `auto`; card_only fails instead, below.
+        config(['xpost.publishing.destination_render' => 'auto']);
+
         $this->fakeX();
         $media = $this->video();
         $media->forceFill(['x_media_ids' => [$this->xApp->id => '999']])->save();
@@ -203,6 +266,8 @@ class VideoWebsiteCardTest extends TestCase
     public function an_oauth2_account_cannot_build_cards(): void
     {
         // The Ads API is OAuth 1.0a only; a bearer token gets a bare 403 there.
+        config(['xpost.publishing.destination_render' => 'auto']);
+
         $this->fakeX();
         $media = $this->video();
         $media->forceFill(['x_media_ids' => [$this->xApp->id => '999']])->save();
@@ -225,6 +290,7 @@ class VideoWebsiteCardTest extends TestCase
     #[Test]
     public function an_image_post_does_not_use_a_card(): void
     {
+        // An image cannot make a card, so card_only must not block it either.
         $this->fakeX();
 
         $image = PostMedia::factory()->create([
@@ -247,6 +313,8 @@ class VideoWebsiteCardTest extends TestCase
     #[Test]
     public function a_failed_card_build_still_publishes_the_post(): void
     {
+        config(['xpost.publishing.destination_render' => 'auto']);
+
         $media = $this->video();
         $media->forceFill([
             'x_media_ids' => ['amplify:'.$this->xApp->id => '13_999', $this->xApp->id => '999'],

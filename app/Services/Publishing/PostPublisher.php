@@ -98,6 +98,26 @@ final class PostPublisher
         try {
             $cardUri = $this->resolveCard($target, $account);
 
+            /*
+             * Under card_only a post that wanted a card and did not get one is
+             * a failure, not something to publish a lesser version of. The
+             * whole point of the mode is that one campaign looks the same
+             * wherever it appears, and a silent downgrade would break exactly
+             * that -- invisibly, on whichever accounts happen to lack an ads
+             * account.
+             */
+            if ($cardUri === null && $this->cardRequiredFor($target)) {
+                $this->limiter->releaseAccountSlot($account);
+                $this->limiter->releaseAppSlot($app);
+
+                return $this->fail(
+                    $target,
+                    'card_unavailable',
+                    'Bài này cấu hình chỉ đăng dạng card, nhưng '.$account->handle()
+                    .' chưa có Ads account + OAuth 1.0a nên không tạo được card.',
+                );
+            }
+
             // A card supplies its own media; uploading it twice would cost an
             // extra transcode per account for a file the post never references.
             $mediaIds = $cardUri === null ? $this->resolveMedia($target, $account) : [];
@@ -205,6 +225,30 @@ final class PostPublisher
 
             return null;
         }
+    }
+
+    /**
+     * Whether this target had to produce a card.
+     *
+     * Only posts that actually wanted one: a video plus a destination. A post
+     * with no media has nothing to build a card from, and refusing to publish
+     * a plain link post would help nobody.
+     */
+    private function cardRequiredFor(PostTarget $target): bool
+    {
+        if (config('xpost.publishing.destination_render') !== 'card_only') {
+            return false;
+        }
+
+        $mediaIds = $target->rendered_media_ids ?? [];
+
+        if (trim((string) $target->rendered_url) === '' || $mediaIds === []) {
+            return false;
+        }
+
+        $media = PostMedia::query()->find($mediaIds[0]);
+
+        return $media !== null && str_starts_with((string) $media->mime, 'video/');
     }
 
     /** @return list<string> */

@@ -32,9 +32,32 @@ return [
         'default_account_daily_cap' => (int) env('XPOST_ACCOUNT_DAILY_CAP', 50),
 
         /*
+         * How a post with media and a website destination is rendered.
+         *
+         *   card_only  Always a video_website card -- video playing inline with
+         *              a "From <domain>" caption. An account that cannot build
+         *              one FAILS rather than publishing a lesser version, so a
+         *              campaign looks the same everywhere it appears.
+         *   auto       Card where possible, a call-to-action button elsewhere.
+         *              Everything publishes, but the same post renders two
+         *              different ways across the pool.
+         *
+         * card_only is a deliberate trade: a card needs an ads account, and X
+         * allows exactly one FULL promotable user per ads account, so it can
+         * never cover a pool of thousands. Choosing it means choosing
+         * consistency over reach.
+         *
+         * Posts with no media are unaffected either way -- there is nothing to
+         * build a card from, so the URL goes in the text and X makes a card
+         * from the destination's own meta tags.
+         */
+        'destination_render' => env('XPOST_DESTINATION_RENDER', 'card_only'),
+
+        /*
          * Which call to action carries the destination link on a post with
-         * media. X documents `visit_site` and `watch_now` identically -- "HTTPS
-         * URL the CTA links to" -- and says nothing about how either renders.
+         * media, when destination_render allows one. X documents `visit_site`
+         * and `watch_now` identically -- "HTTPS URL the CTA links to" -- and
+         * says nothing about how either renders.
          *
          * Measured on a live post, 26 Aug 2026:
          *   visit_site  a "Visit <domain>" button over the video     ← works

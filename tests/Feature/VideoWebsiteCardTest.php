@@ -336,4 +336,71 @@ class VideoWebsiteCardTest extends TestCase
         $this->assertArrayNotHasKey('card_uri', $body);
         $this->assertSame(['999'], $body['media']['media_ids']);
     }
+
+    #[Test]
+    public function a_minted_card_is_remembered_on_the_target(): void
+    {
+        // publish() runs again on every retry. Without this the card is minted
+        // afresh each attempt and the previous one is abandoned.
+        $this->fakeX();
+        $media = $this->video();
+
+        $target = $this->target($this->adsAccount(), [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+        ]);
+
+        app(PostPublisher::class)->publish($target->fresh());
+
+        $this->assertSame('5551234', $target->fresh()->card_uri);
+    }
+
+    #[Test]
+    public function a_retry_reuses_the_card_instead_of_minting_another(): void
+    {
+        /*
+         * A target X rate-limited four times used to mint five cards and
+         * publish one, leaving four behind in the ads account forever. Minting
+         * is a paid round trip inside the critical path, so the waste is real
+         * on both sides.
+         */
+        $this->fakeX();
+        $media = $this->video();
+
+        $target = $this->target($this->adsAccount(), [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+            // What a deferred attempt leaves behind.
+            'card_uri' => '5551234',
+            'attempts' => 1,
+        ]);
+
+        $body = $this->publish($target);
+
+        $this->assertSame('5551234', $body['card_uri']);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'ads-api.x.com'));
+    }
+
+    #[Test]
+    public function a_remembered_card_survives_an_account_losing_ads_access(): void
+    {
+        /*
+         * The card was already built and paid for; the content behind it was
+         * frozen at fan-out. Re-checking the account's credentials on a retry
+         * would throw away a working card for a post that is otherwise ready.
+         */
+        $this->fakeX();
+        $media = $this->video();
+
+        $target = $this->target($this->adsAccount(['ads_account_id' => null]), [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+            'card_uri' => '5551234',
+        ]);
+
+        $this->assertSame('5551234', $this->publish($target)['card_uri']);
+    }
 }

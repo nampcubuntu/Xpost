@@ -31,6 +31,9 @@ use Illuminate\Support\Facades\Log;
  */
 final class PostPublisher
 {
+    /** @var array<int, PostMedia|null> keyed by target id */
+    private array $mediaCache = [];
+
     public function __construct(
         private readonly XApiClientFactory $clients,
         private readonly XAppSelector $apps,
@@ -200,22 +203,37 @@ final class PostPublisher
      */
     private function resolveCard(PostTarget $target, XAccount $account): ?string
     {
-        $url = trim((string) $target->rendered_url);
-        $mediaIds = $target->rendered_media_ids ?? [];
+        /*
+         * A card this target already paid for.
+         *
+         * publish() runs again on every retry, and the card is minted before
+         * the call to X -- so a target deferred by a rate limit used to mint a
+         * fresh card on each attempt and abandon the last one in the ads
+         * account. The content behind the card is frozen at fan-out, so the
+         * card stays valid however many attempts it takes.
+         */
+        if (filled($target->card_uri)) {
+            return (string) $target->card_uri;
+        }
 
-        if ($url === '' || $mediaIds === [] || ! $this->cards->isAvailableFor($account)) {
+        $url = trim((string) $target->rendered_url);
+
+        if ($url === '' || ! $this->cards->isAvailableFor($account)) {
             return null;
         }
 
-        $media = PostMedia::query()->find($mediaIds[0]);
+        $media = $this->cardMedia($target);
 
-        // Cards are a video format; an image post has nothing to gain here.
-        if ($media === null || ! str_starts_with((string) $media->mime, 'video/')) {
+        if ($media === null) {
             return null;
         }
 
         try {
-            return $this->cards->videoWebsiteCard($account, $media, $url, $target->rendered_headline);
+            $cardUri = $this->cards->videoWebsiteCard($account, $media, $url, $target->rendered_headline);
+
+            $target->forceFill(['card_uri' => $cardUri])->save();
+
+            return $cardUri;
         } catch (\Throwable $e) {
             Log::channel('xpost')->warning('Card build failed, publishing without one', [
                 'target_id' => $target->id,
@@ -225,6 +243,30 @@ final class PostPublisher
 
             return null;
         }
+    }
+
+    /**
+     * The video a card would be built from, or null when there is not one.
+     *
+     * Both callers need the same lookup, and asking twice per target is two
+     * queries for a value that cannot change: the media ids were frozen at
+     * fan-out.
+     */
+    private function cardMedia(PostTarget $target): ?PostMedia
+    {
+        if (array_key_exists($target->id, $this->mediaCache)) {
+            return $this->mediaCache[$target->id];
+        }
+
+        $mediaIds = $target->rendered_media_ids ?? [];
+        $media = $mediaIds === [] ? null : PostMedia::query()->find($mediaIds[0]);
+
+        // Cards are a video format; an image post has nothing to gain here.
+        if ($media !== null && ! str_starts_with((string) $media->mime, 'video/')) {
+            $media = null;
+        }
+
+        return $this->mediaCache[$target->id] = $media;
     }
 
     /**
@@ -240,15 +282,11 @@ final class PostPublisher
             return false;
         }
 
-        $mediaIds = $target->rendered_media_ids ?? [];
-
-        if (trim((string) $target->rendered_url) === '' || $mediaIds === []) {
+        if (trim((string) $target->rendered_url) === '') {
             return false;
         }
 
-        $media = PostMedia::query()->find($mediaIds[0]);
-
-        return $media !== null && str_starts_with((string) $media->mime, 'video/');
+        return $this->cardMedia($target) !== null;
     }
 
     /** @return list<string> */

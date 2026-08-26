@@ -23,7 +23,7 @@ class PostTarget extends Model
 
     protected $fillable = [
         'post_id', 'x_account_id', 'team_id', 'post_variant_id',
-        'rendered_body', 'rendered_headline', 'rendered_url', 'rendered_media_ids',
+        'rendered_body', 'rendered_headline', 'rendered_url', 'rendered_media_ids', 'card_uri',
         'status', 'scheduled_at', 'available_at',
     ];
 

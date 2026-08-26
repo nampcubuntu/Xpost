@@ -50,6 +50,17 @@ final class XAdsApiClient
     }
 
     /**
+     * Cards outlive the posts that used them and nothing reaps them, so an
+     * account accumulates them indefinitely. Deleting one is safe once no live
+     * post references it -- X keeps its own copy of what a published post
+     * rendered.
+     */
+    public function delete(string $path): Response
+    {
+        return $this->send('DELETE', $path);
+    }
+
+    /**
      * POST with a JSON body.
      *
      * The cards endpoint rejects a `components` array passed as a query string

@@ -16,6 +16,7 @@ use App\Services\Analytics\MetricsRecorder;
 use App\Services\X\DTO\TweetPayload;
 use App\Services\X\XApiClientFactory;
 use App\Services\X\XAppSelector;
+use App\Services\X\XCardService;
 use App\Services\X\XMediaUploader;
 use App\Services\X\XRateLimiter;
 use Illuminate\Support\Facades\Log;
@@ -36,6 +37,7 @@ final class PostPublisher
         private readonly XRateLimiter $limiter,
         private readonly XMediaUploader $media,
         private readonly MetricsRecorder $metrics,
+        private readonly XCardService $cards,
     ) {}
 
     public function publish(PostTarget $target): PublishOutcome
@@ -94,13 +96,25 @@ final class PostPublisher
         $startedAt = hrtime(true);
 
         try {
-            $mediaIds = $this->resolveMedia($target, $account);
+            $cardUri = $this->resolveCard($target, $account);
+
+            // A card supplies its own media; uploading it twice would cost an
+            // extra transcode per account for a file the post never references.
+            $mediaIds = $cardUri === null ? $this->resolveMedia($target, $account) : [];
 
             $payload = new TweetPayload(
-                text: $target->rendered_body,
+                text: (string) $target->rendered_body,
                 mediaIds: $mediaIds,
                 replySettings: $target->post?->reply_settings,
-                nullcast: (bool) $target->post?->nullcast || (bool) $target->post?->promoted_only,
+                // `nullcast` is what X calls it; `promoted_only` is what the
+                // advertiser-facing UI calls it. One column, one meaning.
+                nullcast: (bool) $target->post?->promoted_only,
+                // The payload decides where these land: a call to action on the
+                // media when there is media, appended to the text when there is not.
+                websiteUrl: $target->rendered_url,
+                title: $target->rendered_headline,
+                mediaCta: (string) config('xpost.publishing.media_cta', 'visit_site'),
+                cardUri: $cardUri,
             );
 
             $result = $this->clients->for($account)->createTweet($payload);
@@ -148,6 +162,48 @@ final class PostPublisher
             }
 
             return $this->fail($target, 'internal_error', $e->getMessage());
+        }
+    }
+
+    /**
+     * A video_website card, when this account can build one and the post wants
+     * a destination behind its video.
+     *
+     * The card is what produces the tappable "From <domain>" row under a video
+     * -- the format X Ads Manager makes -- while the post itself still goes out
+     * through POST /2/tweets and so stays on the timeline.
+     *
+     * Deliberately best-effort: a card needs the Ads API, an ads account and
+     * OAuth 1.0a, and if any of that is missing the post should still publish
+     * the ordinary way rather than fail. The fallback is a call to action,
+     * which is a button instead of a caption -- worse looking, not broken.
+     */
+    private function resolveCard(PostTarget $target, XAccount $account): ?string
+    {
+        $url = trim((string) $target->rendered_url);
+        $mediaIds = $target->rendered_media_ids ?? [];
+
+        if ($url === '' || $mediaIds === [] || ! $this->cards->isAvailableFor($account)) {
+            return null;
+        }
+
+        $media = PostMedia::query()->find($mediaIds[0]);
+
+        // Cards are a video format; an image post has nothing to gain here.
+        if ($media === null || ! str_starts_with((string) $media->mime, 'video/')) {
+            return null;
+        }
+
+        try {
+            return $this->cards->videoWebsiteCard($account, $media, $url, $target->rendered_headline);
+        } catch (\Throwable $e) {
+            Log::channel('xpost')->warning('Card build failed, publishing without one', [
+                'target_id' => $target->id,
+                'account_id' => $account->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
         }
     }
 

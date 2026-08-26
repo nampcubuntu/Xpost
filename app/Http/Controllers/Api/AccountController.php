@@ -56,6 +56,8 @@ class AccountController extends Controller
             'daily_post_cap' => ['integer', 'min:0', 'max:2000'],
             'status' => [Rule::enum(AccountStatus::class)],
             'timezone' => ['nullable', 'timezone'],
+            // X Ads account id, e.g. 18ce55wllne -- lets this account build cards.
+            'ads_account_id' => ['nullable', 'string', 'max:32'],
             'proxy_id' => ['nullable', 'integer', Rule::exists('proxies', 'id')],
             'x_app_id' => ['nullable', 'integer', Rule::exists('x_apps', 'id')],
         ]);

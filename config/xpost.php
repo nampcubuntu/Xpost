@@ -30,6 +30,21 @@ return [
 
     'publishing' => [
         'default_account_daily_cap' => (int) env('XPOST_ACCOUNT_DAILY_CAP', 50),
+
+        /*
+         * Which call to action carries the destination link on a post with
+         * media. X documents `visit_site` and `watch_now` identically -- "HTTPS
+         * URL the CTA links to" -- and says nothing about how either renders.
+         *
+         * Measured on a live post, 26 Aug 2026:
+         *   visit_site  a "Visit <domain>" button over the video     ← works
+         *   watch_now   accepted, 201, published, and X rendered no
+         *               link at all. The URL is silently dropped.
+         *
+         * Left configurable in case X starts honouring watch_now, but there is
+         * no reason to choose it today.
+         */
+        'media_cta' => env('XPOST_MEDIA_CTA', 'visit_site'),
         'app_burst_per_15min' => (int) env('XPOST_APP_BURST_15MIN', 300),
         'max_targets_per_post' => (int) env('XPOST_MAX_TARGETS_PER_POST', 20_000),
         'dispatch_limit_per_run' => (int) env('XPOST_DISPATCH_LIMIT', 1_000),

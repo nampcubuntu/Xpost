@@ -24,6 +24,8 @@ class XAccountResource extends JsonResource
             'tweet_count' => $this->tweet_count,
             'verified_type' => $this->verified_type,
             'location' => $this->location,
+            // Present means this account can build video_website cards.
+            'ads_account_id' => $this->ads_account_id,
             'timezone' => $this->timezone,
             // 'manual' | 'location' | 'proxy' | null — lets the UI show whether
             // a timezone was typed or inferred.

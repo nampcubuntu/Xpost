@@ -28,9 +28,20 @@ final class XOAuth2Service
 
     private const TOKEN_URL = 'https://api.x.com/2/oauth2/token';
 
+    /**
+     * The minimum that lets an account post text, media and be identified.
+     *
+     * `media.write` is required by POST /2/media/upload and by nothing else, so
+     * a token without it publishes text perfectly and then returns a bare 403
+     * the first time a file is attached -- with no hint that a scope is the
+     * problem. It is absent from the scope checklist X shows in its own token
+     * generator, which is not evidence that it is invalid.
+     *
+     * `offline.access` is what yields a refresh token -- without it every
+     * account would need reconnecting by hand every two hours.
+     */
     public const DEFAULT_SCOPES = [
-        'tweet.read', 'tweet.write', 'users.read',
-        'offline.access', 'media.write',
+        'tweet.read', 'tweet.write', 'users.read', 'offline.access', 'media.write',
     ];
 
     /** Build the consent URL and persist the PKCE verifier for the callback. */

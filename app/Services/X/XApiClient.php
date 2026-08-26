@@ -86,7 +86,10 @@ final class XApiClient
      * The single choke point every request goes through: auth, proxy, retries,
      * rate-limit accounting and error normalisation all live here.
      */
-    public function send(string $method, string $path, array $query = [], array $json = [], ?callable $configure = null): Response
+    /**
+     * @param  array  $multipart  Guzzle multipart parts; wins over $json when set
+     */
+    public function send(string $method, string $path, array $query = [], array $json = [], ?callable $configure = null, array $multipart = []): Response
     {
         $request = $this->request();
 
@@ -102,9 +105,20 @@ final class XApiClient
 
         $request = $this->authenticate($request, $method, $url, $json);
 
-        $response = $json !== []
-            ? $request->send($method, $url, ['json' => $json])
-            : $request->send($method, $url);
+        /*
+         * Multipart has to be handed to Guzzle as a request option. Building it
+         * on the PendingRequest with asMultipart()/attach() and then calling
+         * send() without options drops it -- the chunk never leaves, and X
+         * answers "Missing media field in JSON" about a body it never received.
+         *
+         * OAuth 1.0a deliberately gets no body here: only form-encoded bodies
+         * belong in the signature base string, never multipart.
+         */
+        $response = match (true) {
+            $multipart !== [] => $request->asMultipart()->send($method, $url, ['multipart' => $multipart]),
+            $json !== [] => $request->send($method, $url, ['json' => $json]),
+            default => $request->send($method, $url),
+        };
 
         $this->lastRateLimit = RateLimitSnapshot::fromHeaders($response->headers());
 

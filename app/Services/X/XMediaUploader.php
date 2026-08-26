@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\X;
 
+use App\Enums\CredentialType;
 use App\Enums\MediaCategory;
 use App\Exceptions\XApiException;
 use App\Models\PostMedia;
@@ -48,8 +49,47 @@ final class XMediaUploader
         return $mediaId;
     }
 
-    public function upload(PostMedia $media, XAccount $account): string
+    /**
+     * Upload for use in an Ads card, returning the media_key.
+     *
+     * A card will not take a `tweet_video`, and the category is fixed at INIT,
+     * so the same file has to go up a second time under `amplify_video`. Cached
+     * separately for that reason: the two ids are not interchangeable, and
+     * reusing one where the other belongs fails with an unhelpful error.
+     *
+     * Cards want the media_key ("13_1234"), not the media_id ("1234").
+     */
+    public function ensureAmplifyUploaded(PostMedia $media, XAccount $account): string
     {
+        $appId = $account->x_app_id;
+
+        if ($appId === null) {
+            throw new XApiException('Account '.$account->handle().' is not bound to an X app.');
+        }
+
+        $cacheKey = 'amplify:'.$appId;
+
+        if ($cached = data_get($media->x_media_ids, $cacheKey)) {
+            return $cached;
+        }
+
+        $mediaKey = $this->upload($media, $account, MediaCategory::AmplifyVideo, wantKey: true);
+
+        $map = $media->x_media_ids ?? [];
+        $map[$cacheKey] = $mediaKey;
+        $media->forceFill(['x_media_ids' => $map])->save();
+
+        return $mediaKey;
+    }
+
+    public function upload(
+        PostMedia $media,
+        XAccount $account,
+        ?MediaCategory $category = null,
+        bool $wantKey = false,
+    ): string {
+        $this->assertCanUploadMedia($account);
+
         $client = $this->clients->for($account);
         $disk = Storage::disk($media->disk);
 
@@ -57,7 +97,7 @@ final class XMediaUploader
             throw new XApiException("Media file [{$media->path}] is missing from disk [{$media->disk}].");
         }
 
-        $mediaId = $this->init($client, $media);
+        [$mediaId, $mediaKey] = $this->init($client, $media, $category ?? $media->category);
 
         $stream = $disk->readStream($media->path);
         $segment = 0;
@@ -78,24 +118,59 @@ final class XMediaUploader
             }
         }
 
-        $this->finalize($client, $mediaId, $media->category);
+        $this->finalize($client, $mediaId, $category ?? $media->category);
 
         if ($media->alt_text) {
             $this->setAltText($client, $mediaId, $media->alt_text);
         }
 
-        return $mediaId;
+        // Cards address media by key ("13_1234"); a tweet addresses it by id.
+        return $wantKey ? $mediaKey : $mediaId;
     }
 
-    private function init(XApiClient $client, PostMedia $media): string
+    /**
+     * Fail before the upload rather than after, when the token cannot do it.
+     *
+     * POST /2/media/upload is the only endpoint that needs `media.write`, and
+     * X refuses it with a bare `{"title":"Forbidden"}` that names neither the
+     * scope nor the endpoint. A token that publishes text all day returns that
+     * the first time it is handed a file, which sends you looking at billing,
+     * app permissions and the callback URL before the scope.
+     */
+    private function assertCanUploadMedia(XAccount $account): void
     {
-        $response = $client->send('POST', self::ENDPOINT, json: array_filter([
-            'command' => 'INIT',
-            'total_bytes' => $media->size,
+        if ($account->credential_type !== CredentialType::OAuth2) {
+            return;
+        }
+
+        $scopes = (array) $account->scopes;
+
+        // An empty list means the account predates scope recording, not that it
+        // has none -- let X be the judge in that case.
+        if ($scopes !== [] && ! in_array('media.write', $scopes, true)) {
+            throw new XApiException(
+                'Tài khoản '.$account->handle().' chưa có scope [media.write] nên không upload được media. '
+                .'Vào X Apps, bấm "Kết nối tài khoản" để cấp lại quyền.',
+                errorCode: 'missing_media_scope',
+            );
+        }
+    }
+
+    /** @return array{0: string, 1: string} media_id and media_key */
+    private function init(XApiClient $client, PostMedia $media, MediaCategory $category): array
+    {
+        /*
+         * v2 has a dedicated endpoint per step. The v1.1 style of posting
+         * `command=INIT` to /2/media/upload is not supported there: that URL is
+         * the single-shot upload, so it reads the request as a plain upload
+         * missing its file and answers "Missing media field in JSON" -- an
+         * error about a field INIT does not have, on a step that sends no bytes.
+         */
+        $response = $client->send('POST', self::ENDPOINT.'/initialize', json: [
             'media_type' => $media->mime,
-            'media_category' => $media->category->value,
-            'shared' => true,
-        ]));
+            'total_bytes' => $media->size,
+            'media_category' => $category->value,
+        ]);
 
         $id = data_get($response->json(), 'data.id') ?? data_get($response->json(), 'media_id_string');
 
@@ -103,30 +178,22 @@ final class XMediaUploader
             throw new XApiException('INIT did not return a media id.', $response->status(), 'invalid_media', $response->json() ?? []);
         }
 
-        return (string) $id;
+        return [(string) $id, (string) (data_get($response->json(), 'data.media_key') ?: $id)];
     }
 
     private function append(XApiClient $client, string $mediaId, int $segmentIndex, string $chunk): void
     {
-        $client->send('POST', self::ENDPOINT, configure: fn ($request) => $request
-            ->asMultipart()
-            ->attach('media', $chunk, 'chunk')
-            ->withOptions([
-                'multipart' => [
-                    ['name' => 'command', 'contents' => 'APPEND'],
-                    ['name' => 'media_id', 'contents' => $mediaId],
-                    ['name' => 'segment_index', 'contents' => (string) $segmentIndex],
-                    ['name' => 'media', 'contents' => $chunk, 'filename' => 'chunk'],
-                ],
-            ]));
+        // The one call that carries bytes, so the one call that is multipart.
+        // The media id is in the path, not the body.
+        $client->send('POST', self::ENDPOINT."/{$mediaId}/append", multipart: [
+            ['name' => 'segment_index', 'contents' => (string) $segmentIndex],
+            ['name' => 'media', 'contents' => $chunk, 'filename' => 'chunk'],
+        ]);
     }
 
     private function finalize(XApiClient $client, string $mediaId, MediaCategory $category): void
     {
-        $response = $client->send('POST', self::ENDPOINT, json: [
-            'command' => 'FINALIZE',
-            'media_id' => $mediaId,
-        ]);
+        $response = $client->send('POST', self::ENDPOINT."/{$mediaId}/finalize");
 
         $state = data_get($response->json(), 'data.processing_info.state');
 
@@ -141,10 +208,9 @@ final class XMediaUploader
         $waited = 0;
 
         while ($waited < $maxWaitSeconds) {
-            $response = $client->send('GET', self::ENDPOINT, query: [
-                'command' => 'STATUS',
-                'media_id' => $mediaId,
-            ]);
+            // Status is a query on the collection, not a path segment: the
+            // /{id} and /{id}/status forms both 404.
+            $response = $client->send('GET', self::ENDPOINT, query: ['media_id' => $mediaId]);
 
             $info = data_get($response->json(), 'data.processing_info', []);
             $state = $info['state'] ?? 'succeeded';

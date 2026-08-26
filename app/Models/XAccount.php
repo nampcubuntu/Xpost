@@ -30,9 +30,13 @@ class XAccount extends Model
     protected $fillable = [
         'team_id', 'x_app_id', 'proxy_id', 'x_user_id', 'username', 'name', 'avatar_url',
         'followers_count', 'following_count', 'tweet_count', 'verified_type',
-        'location', 'timezone', 'timezone_source',
+        'location', 'timezone', 'timezone_source', 'ads_account_id',
         'credential_type', 'access_token', 'refresh_token', 'token_secret', 'scopes',
         'token_expires_at', 'status', 'daily_post_cap', 'meta',
+        // Written by the OAuth upsert and the token refresher. Missing here,
+        // connecting an account died with a MassAssignmentException after the
+        // authorization code had already been spent.
+        'token_refreshed_at', 'last_synced_at',
     ];
 
     protected $hidden = ['access_token', 'refresh_token', 'token_secret'];
@@ -125,10 +129,31 @@ class XAccount extends Model
 
     public function scopeSearch(Builder $query, ?string $term): Builder
     {
-        return $query->when($term, fn (Builder $q, string $t) => $q->where(
-            fn (Builder $w) => $w->where('username', 'like', "%{$t}%")
-                ->orWhere('name', 'like', "%{$t}%")
-                ->orWhere('x_user_id', $t)
-        ));
+        /*
+         * The UI shows handles as "@goodboy_9x" and the search box invites the
+         * same, but the column stores them bare -- so pasting a handle in
+         * matched nothing at all.
+         *
+         * `_` and `%` are escaped because a handle legitimately contains an
+         * underscore, which LIKE would otherwise read as "any character".
+         */
+        $term = ltrim(trim((string) $term), '@');
+
+        if ($term === '') {
+            return $query;
+        }
+
+        $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $term).'%';
+
+        /*
+         * ESCAPE is spelled out because it is only implicit on MySQL. SQLite --
+         * what the tests run on -- has no default escape character, so the
+         * backslashes above would be matched literally and find nothing.
+         */
+        return $query->where(fn (Builder $w) => $w
+            ->whereRaw('username LIKE ? ESCAPE ?', [$like, '\\'])
+            ->orWhereRaw('name LIKE ? ESCAPE ?', [$like, '\\'])
+            ->orWhere('x_user_id', $term)
+        );
     }
 }

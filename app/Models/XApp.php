@@ -27,6 +27,10 @@ class XApp extends Model
         'team_id', 'name', 'tier', 'client_id', 'client_secret',
         'consumer_key', 'consumer_secret', 'callback_url', 'scopes',
         'daily_post_cap', 'monthly_post_cap', 'max_accounts', 'weight', 'is_active',
+        // Set when the app is created and again by the monthly budget reset in
+        // routes/console.php. Missing here, creating an app threw a
+        // MassAssignmentException instead of saving.
+        'usage_period_started_on',
     ];
 
     protected $hidden = ['client_secret', 'consumer_secret'];

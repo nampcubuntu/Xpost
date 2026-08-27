@@ -55,6 +55,28 @@ const menuFor = ref(null);
 const busy = ref(null);
 const flash = ref(null);
 
+/**
+ * X refuses every account at once when the balance is spent, so publishing
+ * stops as a whole rather than ten thousand posts failing one at a time.
+ * Nothing clears this on its own -- Xpost cannot read the balance, and X
+ * exposes no endpoint that would.
+ */
+const halt = ref(null);
+
+async function resumePublishing() {
+    busy.value = 'halt';
+
+    try {
+        await api.post('publishing/resume');
+        flash.value = { type: 'ok', message: 'Đã tiếp tục đăng. Bài đang chờ sẽ chạy ở lượt kế tiếp.' };
+        await load();
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không tiếp tục được.' };
+    } finally {
+        busy.value = null;
+    }
+}
+
 /** Only work that has not gone out yet can be called back. */
 const canCancel = (post) => ['scheduled', 'publishing', 'draft'].includes(post.status);
 
@@ -131,6 +153,7 @@ async function load() {
         meta.value = data.meta;
         // Absent means the scheduler has not run in the last few minutes.
         schedulerLastRunAt.value = data.scheduler_last_run_at ?? null;
+        halt.value = data.halt ?? null;
     } finally {
         loading.value = false;
     }
@@ -260,6 +283,27 @@ const destinationHost = (url) => {
         >
             <span>{{ flash.message }}</span>
             <button class="text-current opacity-60 hover:opacity-100" @click="flash = null">✕</button>
+        </div>
+
+        <!--
+            Louder than the scheduler warning, because nothing is going out at
+            all and no amount of waiting fixes it.
+        -->
+        <div
+            v-if="halt"
+            class="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-[13px] text-red-900"
+        >
+            <strong class="font-semibold">Đã dừng đăng — X từ chối vì hết số dư.</strong>
+            Bài đang chờ vẫn giữ nguyên, không bài nào bị đánh hỏng. Nạp thêm credit ở
+            developer.x.com rồi bấm Tiếp tục.
+            <p class="mt-1 text-xs opacity-80">X trả lời: {{ halt.reason }}</p>
+            <button
+                class="mt-2 rounded-md border border-red-300 bg-white px-3 py-1.5 text-[13px] font-medium hover:bg-red-100 disabled:opacity-50"
+                :disabled="busy === 'halt'"
+                @click="resumePublishing"
+            >
+                Tôi đã nạp — tiếp tục đăng
+            </button>
         </div>
 
         <div

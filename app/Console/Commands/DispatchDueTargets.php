@@ -9,6 +9,7 @@ use App\Enums\TargetStatus;
 use App\Jobs\PublishPostTarget;
 use App\Models\Post;
 use App\Models\PostTarget;
+use App\Services\Publishing\PublishingHalt;
 use App\Support\TeamContext;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -40,6 +41,11 @@ class DispatchDueTargets extends Command
 
     protected $description = 'Claim due post targets and push them onto the publish queue';
 
+    public function __construct(private readonly PublishingHalt $halt)
+    {
+        parent::__construct();
+    }
+
     public function handle(): int
     {
         $limit = max(1, (int) $this->option('limit'));
@@ -48,6 +54,7 @@ class DispatchDueTargets extends Command
 
         $worker = gethostname().':'.getmypid();
         $dispatched = 0;
+        $halted = 0;
 
         while ($dispatched < $limit) {
             $claimed = $this->claim(min($chunk, $limit - $dispatched), $worker, $teamId);
@@ -57,6 +64,18 @@ class DispatchDueTargets extends Command
             }
 
             foreach ($claimed as $row) {
+                /*
+                 * A team that has run out of credit is refused on every
+                 * account, so pushing its targets only burns claims and log
+                 * lines. They stay claimable and go out when the halt lifts.
+                 */
+                if ($this->halt->isEngaged((int) $row->team_id)) {
+                    $this->release($row);
+                    $halted++;
+
+                    continue;
+                }
+
                 PublishPostTarget::dispatch((int) $row->id, (int) $row->team_id)
                     ->onQueue($this->queueFor($row));
             }
@@ -70,7 +89,32 @@ class DispatchDueTargets extends Command
 
         $this->components->info("Dispatched {$dispatched} target(s).");
 
+        if ($halted > 0) {
+            $this->components->warn("Held back {$halted} target(s): publishing is halted.");
+        }
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Put a claimed row back, untouched.
+     *
+     * Claiming happens in bulk before the halt is known per team, so a held
+     * target has to be handed back rather than left marked `queued` with no
+     * job behind it -- which is exactly the orphan the reaper exists to clean
+     * up, and there is no reason to make one deliberately.
+     */
+    private function release(object $row): void
+    {
+        DB::table('post_targets')
+            ->where('id', $row->id)
+            ->update([
+                'status' => TargetStatus::Pending->value,
+                'claimed_at' => null,
+                'claimed_by' => null,
+                'available_at' => now()->addMinutes(5),
+                'updated_at' => now(),
+            ]);
     }
 
     /**

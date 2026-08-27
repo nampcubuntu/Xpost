@@ -183,7 +183,14 @@ final class XApiClient
             'body' => $body,
         ]);
 
-        if ($response->status() === 429) {
+        $error = XApiException::fromResponseBody($response->status(), $body, $response->body());
+
+        /*
+         * A spent balance can arrive as a 429, and it must not be mistaken for
+         * a rate limit: waiting out a window does not add credit, and the
+         * publisher would keep rescheduling into a wall.
+         */
+        if ($response->status() === 429 && ! $error->isOutOfCredit()) {
             throw new XRateLimitException(
                 'Rate limited by X for '.$this->account->handle(),
                 $this->lastRateLimit?->resetAt,
@@ -191,6 +198,6 @@ final class XApiClient
             );
         }
 
-        throw XApiException::fromResponse($response->status(), $body);
+        throw $error;
     }
 }

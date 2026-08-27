@@ -44,6 +44,7 @@ final class PostPublisher
         private readonly XMediaUploader $media,
         private readonly MetricsRecorder $metrics,
         private readonly XCardService $cards,
+        private readonly PublishingHalt $halt,
     ) {}
 
     public function publish(PostTarget $target): PublishOutcome
@@ -159,6 +160,19 @@ final class PostPublisher
             return $this->defer($target, $e->retryAfterSeconds(), 'x_rate_limited');
         } catch (XApiException $e) {
             $this->metrics->recordPublish($target, 0, false, $e->errorCode);
+
+            /*
+             * No money, not a bad post. Every account is refused at once, so
+             * the queue stops rather than the target failing -- deferring keeps
+             * the campaign intact, and a top-up resumes it with nothing lost.
+             */
+            if ($e->isOutOfCredit()) {
+                $this->limiter->releaseAccountSlot($account);
+                $this->limiter->releaseAppSlot($app);
+                $this->halt->engage((int) $target->team_id, $e->getMessage());
+
+                return $this->defer($target, 900, 'out_of_credit');
+            }
 
             if ($e->requiresReauth()) {
                 $this->markAccountNeedsReauth($account, $e->getMessage());

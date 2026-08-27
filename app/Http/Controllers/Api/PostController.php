@@ -16,6 +16,7 @@ use App\Models\Post;
 use App\Models\PostTarget;
 use App\Services\Publishing\ComposerService;
 use App\Services\Publishing\PostFanoutService;
+use App\Services\Publishing\PublishingHalt;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -25,6 +26,7 @@ class PostController extends Controller
     public function __construct(
         private readonly ComposerService $composer,
         private readonly PostFanoutService $fanout,
+        private readonly PublishingHalt $halt,
     ) {}
 
     public function index(Request $request): AnonymousResourceCollection
@@ -53,8 +55,28 @@ class PostController extends Controller
          * simply sit in `pending` with nothing anywhere saying why. This page is
          * where that is noticed, so this is where the answer belongs.
          */
-        return PostResource::collection($posts)
-            ->additional(['scheduler_last_run_at' => DispatchDueTargets::lastRunAt()]);
+        return PostResource::collection($posts)->additional([
+            'scheduler_last_run_at' => DispatchDueTargets::lastRunAt(),
+            // Set when X refused a post for want of credit, which refuses every
+            // account at once and so is a property of the team, not the post.
+            'halt' => $this->halt->current((int) $request->user()->current_team_id),
+        ]);
+    }
+
+    /**
+     * Resume publishing after a halt.
+     *
+     * Only a human can say the money is back -- Xpost cannot read the balance,
+     * X exposes no endpoint for it. Clearing early costs one refused post and
+     * another halt, which is cheap enough that asking is worse than trying.
+     */
+    public function resume(Request $request): JsonResponse
+    {
+        $this->authorize('viewAny', Post::class);
+
+        $this->halt->release((int) $request->user()->current_team_id);
+
+        return response()->json(['halted' => false]);
     }
 
     public function store(StorePostRequest $request): JsonResponse

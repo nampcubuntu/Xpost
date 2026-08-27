@@ -156,4 +156,26 @@ return [
         'flush_batch_size' => (int) env('XPOST_METRICS_FLUSH_SIZE', 5_000),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Links (Cloudflare Workers KV)
+    |--------------------------------------------------------------------------
+    | The key/value store a Worker reads to resolve short links. Managed from
+    | Xpost so the pairs are not maintained by hand in the Cloudflare dashboard,
+    | which does not scale past a few dozen.
+    |
+    | The token wants exactly one permission -- Workers KV Storage: Edit -- and
+    | should be a scoped token, never the Global API Key, which can do anything
+    | to the whole account.
+    */
+
+    'links' => [
+        'account_id' => env('CLOUDFLARE_ACCOUNT_ID'),
+        'namespace_id' => env('CLOUDFLARE_KV_NAMESPACE_ID'),
+        'api_token' => env('CLOUDFLARE_API_TOKEN'),
+        // Where a short code resolves, e.g. https://l.example.com -- used to
+        // build the URL a post carries, never to call Cloudflare.
+        'base_url' => rtrim((string) env('XPOST_LINK_BASE_URL', ''), '/'),
+    ],
+
 ];

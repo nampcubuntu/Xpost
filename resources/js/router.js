@@ -17,6 +17,7 @@ const routes = [
     { path: '/accounts', name: 'accounts', component: () => import('./pages/Accounts.vue') },
     { path: '/apps', name: 'apps', component: () => import('./pages/Apps.vue') },
     { path: '/proxies', name: 'proxies', component: () => import('./pages/Proxies.vue') },
+    { path: '/links', name: 'links', component: () => import('./pages/Links.vue') },
     { path: '/analytics', name: 'analytics', component: () => import('./pages/Analytics.vue') },
 ];
 

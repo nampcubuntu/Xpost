@@ -47,6 +47,7 @@ const nav = [
             { name: 'accounts', label: 'Tài khoản X', icon: 'accounts' },
             { name: 'apps', label: 'X Apps', icon: 'apps' },
             { name: 'proxies', label: 'Proxy', icon: 'proxy' },
+            { name: 'links', label: 'Short link', icon: 'globe' },
         ],
     },
 ];

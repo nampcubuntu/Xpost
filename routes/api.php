@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\AccountGroupController;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ComposerController;
+use App\Http\Controllers\Api\LinkController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\PostController;
 use App\Http\Controllers\Api\PostScheduleController;
@@ -89,6 +90,16 @@ Route::prefix('v1')->group(function (): void {
             Route::apiResource('apps', XAppController::class)->parameters(['apps' => 'xApp']);
             Route::get('apps/{xApp}/authorize-url', [XAppController::class, 'authorizeUrl']);
             Route::get('apps/{xApp}/authorize-url-oauth1', [XAppController::class, 'authorizeUrlOAuth1']);
+
+            /*
+             * Short links, held in Cloudflare KV rather than this database --
+             * a Worker reads them, so Xpost is one writer of someone else's
+             * store and never mirrors it locally.
+             */
+            Route::get('links', [LinkController::class, 'index']);
+            Route::post('links', [LinkController::class, 'store']);
+            Route::post('links/bulk', [LinkController::class, 'bulk']);
+            Route::delete('links', [LinkController::class, 'destroy']);
 
             Route::apiResource('proxies', ProxyController::class)->except(['show']);
             Route::post('proxies/{proxy}/check', [ProxyController::class, 'check']);

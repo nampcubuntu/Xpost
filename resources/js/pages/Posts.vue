@@ -111,18 +111,45 @@ const rowDate = (post) => post.published_at ?? post.sample?.published_at ?? post
 const isVideo = (media) => media.mime?.startsWith('video/');
 
 /**
- * The media's own shape, clamped.
+ * Thumbnails are a fixed box, deliberately not the media's own shape.
  *
- * Left unclamped, a tall portrait photo would stretch its row twice as high as
- * every other one and the table would look broken; a very wide banner would
- * shrink to a strip. 16:9 down to 4:5 covers what people actually post.
+ * They used to take each file's aspect ratio, clamped -- which still let a 9:16
+ * clip stand four times taller than a 16:9 one and drag its whole row with it.
+ * A list is scanned down the left edge, and rows that change height every time
+ * the creative changes orientation are much harder to read than a slightly
+ * cropped preview. Clamping only softened that; it did not fix it.
  */
-function aspectRatio(media) {
-    if (! media.width || ! media.height) {
-        return '16 / 9';
+
+/**
+ * What the corner of the thumbnail says: duration, shape, and how many more
+ * files there are.
+ *
+ * The shape used to be visible in the box itself. Now that every box is the
+ * same, a vertical clip cropped to 16:9 looks like a landscape one -- so the
+ * orientation has to be written down, or the preview quietly misleads.
+ */
+function mediaBadge(post) {
+    const media = post.media?.[0];
+
+    if (! media) {
+        return null;
     }
 
-    return String(Math.min(1.78, Math.max(0.8, media.width / media.height)));
+    const parts = [];
+
+    if (isVideo(media) && media.duration_ms) {
+        parts.push(duration(media.duration_ms));
+    }
+
+    if (media.width && media.height && media.height > media.width) {
+        parts.push('dọc');
+    }
+
+    if (post.media.length > 1) {
+        parts.push(`+${post.media.length - 1}`);
+    }
+
+    return parts.length ? parts.join(' · ') : null;
 }
 
 const duration = (ms) => {
@@ -283,16 +310,15 @@ const destinationHost = (url) => {
                                         </p>
 
                                         <!--
-                                            The box takes the media's own aspect ratio rather
-                                            than a fixed crop, so a landscape video and a
-                                            squarer photo look like what they are. A <video>
-                                            with preload="metadata" paints its first frame,
-                                            which saves the server generating poster images.
+                                            One fixed box for every row, whatever the creative's
+                                            shape. object-cover fills it from the centre, which
+                                            is where the subject of a vertical clip almost always
+                                            is. A <video> with preload="metadata" paints its
+                                            first frame, saving the server generating posters.
                                         -->
                                         <div
                                             v-if="post.media?.[0]"
-                                            class="relative mt-2 w-40 overflow-hidden rounded-lg border border-neutral-200 bg-neutral-100"
-                                            :style="{ aspectRatio: aspectRatio(post.media[0]) }"
+                                            class="relative mt-2 aspect-video w-32 shrink-0 overflow-hidden rounded-lg border border-neutral-200 bg-neutral-100"
                                         >
                                             <video
                                                 v-if="isVideo(post.media[0])"
@@ -312,22 +338,23 @@ const destinationHost = (url) => {
                                                 v-if="isVideo(post.media[0])"
                                                 class="absolute inset-0 flex items-center justify-center"
                                             >
-                                                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-black/55">
-                                                    <svg viewBox="0 0 16 16" class="h-3 w-3 fill-white">
+                                                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-black/55">
+                                                    <svg viewBox="0 0 16 16" class="h-2.5 w-2.5 fill-white">
                                                         <path d="M5 3.5v9l7.5-4.5z" />
                                                     </svg>
                                                 </span>
                                             </span>
 
+                                            <!--
+                                                Orientation is worth stating now that the box no
+                                                longer shows it, and the count of extra files
+                                                rides along rather than costing another line.
+                                            -->
                                             <span
-                                                v-if="isVideo(post.media[0]) && post.media[0].duration_ms"
+                                                v-if="mediaBadge(post)"
                                                 class="absolute bottom-1 left-1 rounded bg-black/65 px-1 text-[10px] font-medium text-white"
-                                            >{{ duration(post.media[0].duration_ms) }}</span>
+                                            >{{ mediaBadge(post) }}</span>
                                         </div>
-
-                                        <p v-if="post.media?.length > 1" class="mt-1 text-xs text-neutral-500">
-                                            +{{ post.media.length - 1 }} tệp nữa
-                                        </p>
                                     </div>
                                 </div>
                             </td>

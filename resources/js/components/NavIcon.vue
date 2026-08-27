@@ -14,17 +14,32 @@ defineProps({
 const paths = {
     // Campaigns
     analytics: 'M2.5 13.5v-4m4 4V6m4 7.5V9.5m4 4v-9',
-    posts: 'M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5ZM5 5.5h6M5 8h6M5 10.5h3.5',
+    // An open book, which is what X Ads Manager itself puts next to Bài đăng.
+    posts: 'M8 4.7c-1.1-.9-2.6-1.3-4.4-1.3H2.2v8.2h1.4c1.8 0 3.3.4 4.4 1.3M8 4.7c1.1-.9 2.6-1.3 4.4-1.3h1.4v8.2h-1.4c-1.8 0-3.3.4-4.4 1.3M8 4.7v8.2',
 
     // Creatives
     composer: 'M11.5 2.5 13.5 4.5 5.5 12.5 2.5 13.5 3.5 10.5 11.5 2.5ZM10 4l2 2',
     media: 'M2.5 3.5h11v9h-11v-9ZM2.5 10l3-3 2.5 2.5 2-2 3.5 3.5M6 6.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z',
     schedules: 'M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12ZM8 4.8V8l2.3 1.6',
 
-    // Tools
-    accounts: 'M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.3M12 9.7c1.5.5 2.5 1.7 2.5 3.3',
+    /*
+     * Tools.
+     *
+     * One silhouette per destination. Tài khoản X and Thành viên both drew the
+     * group of people, and Proxy and Short link both drew the globe, so half
+     * this section was two pairs of identical marks -- at 15px a duplicated
+     * icon is worse than no icon, because it reads as "you are already here".
+     *
+     * Split by what the page actually holds: one person for a handle, a group
+     * for the team, a rack for the machines requests are routed through, a
+     * chain for the links themselves.
+     */
+    accounts: 'M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12ZM8 8.1a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8ZM4.3 12.7a3.9 3.9 0 0 1 7.4 0',
+    members: 'M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.3M12 9.7c1.5.5 2.5 1.7 2.5 3.3',
+    // A key: what an app row actually holds is a consumer key and secret.
     apps: 'M9.5 2.5a4 4 0 1 0-3.4 6.1L5 9.7v1.6H3.4L2 12.7v1.8h2.5l5.1-5.1A4 4 0 0 0 9.5 2.5ZM10.7 5.3h.01',
-    proxy: 'M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12ZM2.2 6.5h11.6M2.2 9.5h11.6M8 2c1.6 1.7 2.4 3.8 2.4 6S9.6 12.3 8 14M8 2C6.4 3.7 5.6 5.8 5.6 8S6.4 12.3 8 14',
+    proxy: 'M3.4 3h9.2a.9.9 0 0 1 .9.9v2.3a.9.9 0 0 1-.9.9H3.4a.9.9 0 0 1-.9-.9V3.9a.9.9 0 0 1 .9-.9ZM3.4 8.9h9.2a.9.9 0 0 1 .9.9v2.3a.9.9 0 0 1-.9.9H3.4a.9.9 0 0 1-.9-.9V9.8a.9.9 0 0 1 .9-.9ZM4.7 5.05h.01M4.7 10.95h.01',
+    link: 'M6.7 8.7a3.3 3.3 0 0 0 5 .4l2-2a3.3 3.3 0 0 0-4.7-4.7l-1.1 1.1M9.3 7.3a3.3 3.3 0 0 0-5-.4l-2 2a3.3 3.3 0 0 0 4.7 4.7l1.1-1.1',
     queue: 'M8 1.8 14.5 5 8 8.2 1.5 5 8 1.8ZM1.5 8l6.5 3.2L14.5 8M1.5 11l6.5 3.2L14.5 11',
 
     // Chrome

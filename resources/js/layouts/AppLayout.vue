@@ -52,7 +52,7 @@ const nav = [
             { name: 'accounts', label: 'Tài khoản X', icon: 'accounts', ability: 'manage_accounts' },
             { name: 'apps', label: 'X Apps', icon: 'apps', ability: 'manage_infrastructure' },
             { name: 'proxies', label: 'Proxy', icon: 'proxy', ability: 'manage_infrastructure' },
-            { name: 'links', label: 'Short link', icon: 'globe', ability: 'manage_infrastructure' },
+            { name: 'links', label: 'Short link', icon: 'link', ability: 'manage_infrastructure' },
         ],
     },
     {
@@ -60,7 +60,7 @@ const nav = [
         items: [
             // No ability: seeing who else is on the team explains whose
             // campaigns these are, and the page hides what a member cannot do.
-            { name: 'members', label: 'Thành viên', icon: 'accounts' },
+            { name: 'members', label: 'Thành viên', icon: 'members' },
         ],
     },
 ];

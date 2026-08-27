@@ -36,9 +36,19 @@ const paths = {
      */
     accounts: 'M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12ZM8 8.1a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8ZM4.3 12.7a3.9 3.9 0 0 1 7.4 0',
     members: 'M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.3M12 9.7c1.5.5 2.5 1.7 2.5 3.3',
-    // A key: what an app row actually holds is a consumer key and secret.
-    apps: 'M9.5 2.5a4 4 0 1 0-3.4 6.1L5 9.7v1.6H3.4L2 12.7v1.8h2.5l5.1-5.1A4 4 0 0 0 9.5 2.5ZM10.7 5.3h.01',
-    proxy: 'M3.4 3h9.2a.9.9 0 0 1 .9.9v2.3a.9.9 0 0 1-.9.9H3.4a.9.9 0 0 1-.9-.9V3.9a.9.9 0 0 1 .9-.9ZM3.4 8.9h9.2a.9.9 0 0 1 .9.9v2.3a.9.9 0 0 1-.9.9H3.4a.9.9 0 0 1-.9-.9V9.8a.9.9 0 0 1 .9-.9ZM4.7 5.05h.01M4.7 10.95h.01',
+    /*
+     * The grid of tiles every launcher uses for "apps". A key was accurate --
+     * an app row holds a consumer key and secret -- but accuracy is not the
+     * job here: a key reads as credentials, security, login, and the reader
+     * has to already know what the page holds before the icon means anything.
+     */
+    apps: 'M2.4 2.4h4.4v4.4H2.4ZM9.2 2.4h4.4v4.4H9.2ZM2.4 9.2h4.4v4.4H2.4ZM9.2 9.2h4.4v4.4H9.2Z',
+    /*
+     * Traffic passing through an intermediate hop on its way out, which is the
+     * whole of what a proxy is. The rack that was here read as hosting or a
+     * database -- it drew the machine instead of what the machine does.
+     */
+    proxy: 'M2.2 11.8 6.2 9.2M9.8 6.8 13.8 4.2M13 5.8 13.8 4.2 12.1 4.3M8 10.1A2.1 2.1 0 1 0 8 5.9a2.1 2.1 0 0 0 0 4.2',
     link: 'M6.7 8.7a3.3 3.3 0 0 0 5 .4l2-2a3.3 3.3 0 0 0-4.7-4.7l-1.1 1.1M9.3 7.3a3.3 3.3 0 0 0-5-.4l-2 2a3.3 3.3 0 0 0 4.7 4.7l1.1-1.1',
     queue: 'M8 1.8 14.5 5 8 8.2 1.5 5 8 1.8ZM1.5 8l6.5 3.2L14.5 8M1.5 11l6.5 3.2L14.5 11',
 

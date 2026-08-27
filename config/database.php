@@ -179,6 +179,32 @@ return [
             'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
         ],
 
+        /*
+         * The queue gets a database of its own.
+         *
+         * REDIS_QUEUE_DB was already in .env with nothing reading it, so every
+         * queued job shared database 0 with sessions, cache locks and the rate
+         * limiter. That is one FLUSHDB -- or one session store being cleared --
+         * away from destroying a queue holding a day's publishing, and the
+         * command that does it would look entirely harmless.
+         *
+         * Separating them also makes `redis-cli -n 2 DBSIZE` an honest answer
+         * to "how much work is waiting", which it cannot be while sessions
+         * share the space.
+         */
+        'queue' => [
+            'url' => env('REDIS_URL'),
+            'host' => env('REDIS_HOST', '127.0.0.1'),
+            'username' => env('REDIS_USERNAME'),
+            'password' => env('REDIS_PASSWORD'),
+            'port' => env('REDIS_PORT', '6379'),
+            'database' => env('REDIS_QUEUE_DB', '2'),
+            'max_retries' => env('REDIS_MAX_RETRIES', 3),
+            'backoff_algorithm' => env('REDIS_BACKOFF_ALGORITHM', 'decorrelated_jitter'),
+            'backoff_base' => env('REDIS_BACKOFF_BASE', 100),
+            'backoff_cap' => env('REDIS_BACKOFF_CAP', 1000),
+        ],
+
     ],
 
 ];

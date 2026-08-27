@@ -54,7 +54,13 @@ return [
     |
     */
 
-    'use' => 'default',
+    /*
+     * Kept with the queue rather than on the default connection. Horizon's
+     * metrics describe the queue and belong beside it, which leaves database 0
+     * holding only sessions and locks -- so clearing one of those can no longer
+     * take a day's queued publishing with it.
+     */
+    'use' => 'queue',
 
     /*
     |--------------------------------------------------------------------------

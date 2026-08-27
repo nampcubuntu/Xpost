@@ -89,6 +89,39 @@ class LegacyTimezoneTest extends TestCase
     }
 
     #[Test]
+    public function the_picker_lists_every_zone_ordered_by_offset(): void
+    {
+        /*
+         * By offset, the way X Ads Manager orders its own, because that is how
+         * the question is asked: nobody wants "the zones beginning with P",
+         * they want UTC+7 -- and alphabetically the zones an hour apart are
+         * four hundred rows apart.
+         */
+        $zones = $this->getJson('/api/v1/timezones')->assertOk()->json('data');
+
+        $this->assertGreaterThan(400, count($zones));
+
+        $offsets = array_column($zones, 'offset_minutes');
+        $sorted = $offsets;
+        sort($sorted);
+
+        $this->assertSame($sorted, $offsets);
+        $this->assertSame('Pacific/Midway', $zones[0]['value']);
+    }
+
+    #[Test]
+    public function the_offset_reads_the_way_a_person_says_it(): void
+    {
+        // "UTC+07:00" in a column reads as a timestamp; the minutes only carry
+        // information for the half-hour zones.
+        $zones = collect($this->getJson('/api/v1/timezones')->json('data'))->keyBy('value');
+
+        $this->assertSame('UTC+7', $zones['Asia/Ho_Chi_Minh']['offset']);
+        $this->assertSame('UTC+5:30', $zones['Asia/Kolkata']['offset']);
+        $this->assertSame('UTC', $zones['UTC']['offset']);
+    }
+
+    #[Test]
     public function nonsense_is_still_refused(): void
     {
         // Widened, not opened: the rule still has to catch a typo.

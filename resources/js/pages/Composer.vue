@@ -61,15 +61,25 @@ const destinations = [
 ];
 
 onMounted(async () => {
-    await composer.loadOptions();
+    /*
+     * Three round trips became two. The options and the post itself do not
+     * depend on each other, so fetching them one after the other spent a whole
+     * trip to the edge waiting for nothing.
+     *
+     * The measure and the estimate do have to come second -- both describe the
+     * post -- except on a blank new one, where the store already holds exactly
+     * what the server would answer: 280 of 280 left, one permutation. Asking
+     * anyway is a round trip spent confirming the defaults.
+     */
+    await Promise.all([
+        composer.loadOptions(),
+        props.id ? composer.load(props.id) : Promise.resolve(composer.reset()),
+    ]);
 
-    if (props.id) {
-        await composer.load(props.id);
-    } else {
-        composer.reset();
-    }
-
-    await Promise.all([composer.refreshMeasure(), composer.refreshEstimate()]);
+    await Promise.all([
+        composer.hasContent ? composer.refreshMeasure() : Promise.resolve(),
+        composer.refreshEstimate(),
+    ]);
 });
 
 // The counter is authoritative on the server (X weights CJK and URLs

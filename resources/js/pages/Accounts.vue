@@ -50,9 +50,18 @@ async function load() {
 }
 
 onMounted(async () => {
-    await load();
+    /*
+     * One wave, not two. Groups and apps do not depend on the account list, so
+     * waiting for it first bought nothing and cost a full round trip -- which
+     * behind a tunnel is most of a second, more than the four queries put
+     * together.
+     */
+    const [, groupResponse, appResponse] = await Promise.all([
+        load(),
+        api.get('account-groups'),
+        api.get('apps'),
+    ]);
 
-    const [groupResponse, appResponse] = await Promise.all([api.get('account-groups'), api.get('apps')]);
     groups.value = groupResponse.data.data;
     apps.value = appResponse.data.data;
 });

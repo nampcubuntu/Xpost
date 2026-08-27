@@ -54,4 +54,33 @@ router.beforeEach(async (to) => {
     return true;
 });
 
+/**
+ * Pull every route's chunk down while the browser is idle.
+ *
+ * Each page is a separate lazy chunk, so the first visit to a section waits on
+ * a download before it can even start asking for data. Behind a tunnel that is
+ * most of a second of nothing happening, and it is paid once per section per
+ * deploy -- which is exactly the "switching sections is slow" that gets
+ * noticed, because it never happens on the section you are already on.
+ *
+ * Fetching them costs nothing that matters: they are content-hashed and served
+ * from the edge cache, the work happens after the first page is up, and a
+ * failure here is a chunk that loads normally later.
+ */
+export function warmRouteChunks() {
+    const warm = () => routes.forEach((route) => {
+        try {
+            route.component?.();
+        } catch {
+            // A chunk that will not prefetch still loads on navigation.
+        }
+    });
+
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(warm, { timeout: 4000 });
+    } else {
+        setTimeout(warm, 2000);
+    }
+}
+
 export default router;

@@ -253,4 +253,25 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Proxies
+    |--------------------------------------------------------------------------
+    | Where the check asks what the exit looks like from outside. The request
+    | goes through the proxy, so the only address it can reveal is the proxy's
+    | own -- nothing of yours is sent.
+    |
+    | Any endpoint that answers with JSON for the caller's own IP works; the
+    | keys of ipwho.is, ipapi.co and ip-api.com are all understood. Blank
+    | disables the lookup and leaves country, region and city as typed.
+    */
+
+    'proxies' => [
+        'geo_endpoint' => env('XPOST_PROXY_GEO_ENDPOINT', 'https://ipwho.is/'),
+
+        // Enough for a supplier's whole delivery in one paste, low enough that
+        // a runaway loop cannot land 100k rows in a single request.
+        'bulk_limit' => (int) env('XPOST_PROXY_BULK_LIMIT', 2000),
+    ],
+
 ];

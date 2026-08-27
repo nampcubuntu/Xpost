@@ -21,7 +21,7 @@ class Proxy extends Model
 
     protected $fillable = [
         'team_id', 'label', 'scheme', 'host', 'port', 'username', 'password',
-        'country', 'max_accounts', 'is_active',
+        'country', 'region', 'city', 'exit_ip', 'max_accounts', 'is_active',
     ];
 
     protected $hidden = ['password'];
@@ -37,6 +37,7 @@ class Proxy extends Model
             'assigned_count' => 'integer',
             'latency_ms' => 'integer',
             'last_checked_at' => 'datetime',
+            'geo_checked_at' => 'datetime',
         ];
     }
 

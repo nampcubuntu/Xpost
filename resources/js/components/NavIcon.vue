@@ -35,8 +35,9 @@ const paths = {
      * icon is worse than no icon, because it reads as "you are already here".
      *
      * Split by what the page actually holds: one person for a handle, a group
-     * for the team, a route through a hop for the proxies, a chain for the
-     * links themselves.
+     * for the team, a chain for the links themselves. Proxy keeps the globe --
+     * with Short link moved to the chain there is nothing left for it to
+     * collide with, and an exit IP in another country is what the page is for.
      */
     accounts: 'M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12ZM8 8.1a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8ZM4.3 12.7a3.9 3.9 0 0 1 7.4 0',
     members: 'M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.3M12 9.7c1.5.5 2.5 1.7 2.5 3.3',
@@ -47,12 +48,6 @@ const paths = {
      * has to already know what the page holds before the icon means anything.
      */
     apps: 'M2.4 2.4h4.4v4.4H2.4ZM9.2 2.4h4.4v4.4H9.2ZM2.4 9.2h4.4v4.4H2.4ZM9.2 9.2h4.4v4.4H9.2Z',
-    /*
-     * Traffic passing through an intermediate hop on its way out, which is the
-     * whole of what a proxy is. The rack that was here read as hosting or a
-     * database -- it drew the machine instead of what the machine does.
-     */
-    proxy: 'M2.2 11.8 6.2 9.2M9.8 6.8 13.8 4.2M13 5.8 13.8 4.2 12.1 4.3M8 10.1A2.1 2.1 0 1 0 8 5.9a2.1 2.1 0 0 0 0 4.2',
     link: 'M6.7 8.7a3.3 3.3 0 0 0 5 .4l2-2a3.3 3.3 0 0 0-4.7-4.7l-1.1 1.1M9.3 7.3a3.3 3.3 0 0 0-5-.4l-2 2a3.3 3.3 0 0 0 4.7 4.7l1.1-1.1',
     queue: 'M8 1.8 14.5 5 8 8.2 1.5 5 8 1.8ZM1.5 8l6.5 3.2L14.5 8M1.5 11l6.5 3.2L14.5 11',
 
@@ -76,7 +71,7 @@ const paths = {
  * the selected book is a solid black shape among outlines. That reads from the
  * corner of the eye, where a colour change on a 1.3px stroke does not.
  *
- * Only icons with a natural solid form are here. A chain and a route are line
+ * Only icons with a natural solid form are here. A chain and a globe are line
  * drawings -- filling a line yields a blob, not a bolder version of itself --
  * so those fall back to the outline at a heavier stroke. The two styles never
  * have to agree with each other: exactly one row is selected at a time, so no

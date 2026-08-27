@@ -127,6 +127,7 @@ Route::prefix('v1')->group(function (): void {
             Route::delete('link-domains/{domain}', [LinkController::class, 'destroyDomain']);
 
             Route::apiResource('proxies', ProxyController::class)->except(['show']);
+            Route::post('proxies/bulk', [ProxyController::class, 'bulk']);
             Route::post('proxies/{proxy}/check', [ProxyController::class, 'check']);
 
             // ----- Media -----

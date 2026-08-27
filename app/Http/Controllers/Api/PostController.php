@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Console\Commands\DispatchDueTargets;
 use App\Enums\PostStatus;
 use App\Enums\TargetStatus;
+use App\Enums\TeamRole;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StorePostRequest;
 use App\Http\Requests\UpdatePostRequest;
@@ -92,7 +93,12 @@ class PostController extends Controller
      */
     public function updateBudget(Request $request): JsonResponse
     {
-        $this->authorize('viewAny', Post::class);
+        /*
+         * Not viewAny. That gate is "you are on a team", which would let any
+         * member raise or remove the ceiling on the team's spending -- and the
+         * spending is real money at twenty cents a post.
+         */
+        abort_unless($request->user()->isAtLeast($request->user()->current_team_id, TeamRole::Admin), 403);
 
         $data = $request->validate([
             'daily_budget_usd' => ['present', 'nullable', 'numeric', 'min:0', 'max:1000000'],

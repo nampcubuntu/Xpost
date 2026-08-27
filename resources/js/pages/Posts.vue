@@ -1,7 +1,10 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import api from '../lib/api';
+import { useAuthStore } from '../stores/auth';
 import NavIcon from '../components/NavIcon.vue';
+
+const auth = useAuthStore();
 
 const posts = ref([]);
 const meta = ref(null);
@@ -347,7 +350,12 @@ const destinationHost = (url) => {
                         <button class="text-[12px] text-blue-600 hover:underline" :disabled="busy === 'budget'">Lưu</button>
                         <button type="button" class="text-[12px] text-neutral-500 hover:underline" @click="editingBudget = false">Huỷ</button>
                     </form>
-                    <button v-else class="mt-0.5 text-[11px] text-blue-600 hover:underline" @click="startEditBudget">
+                    <!-- Spending is real money; only an admin moves the ceiling. -->
+                    <button
+                        v-else-if="auth.can('manage_budget')"
+                        class="mt-0.5 text-[11px] text-blue-600 hover:underline"
+                        @click="startEditBudget"
+                    >
                         {{ budget.budget_usd === null ? 'Đặt trần chi tiêu' : 'Sửa trần' }}
                     </button>
                 </div>

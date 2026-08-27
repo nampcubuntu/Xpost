@@ -99,6 +99,16 @@ class AuthController extends Controller
                 'timezone' => $user->timezone,
                 'current_team_id' => $user->current_team_id,
                 'role' => $user->current_team_id ? $user->roleOn($user->current_team_id) : null,
+                'role_label' => $user->current_team_id
+                    ? $user->teamRole($user->current_team_id)?->label()
+                    : null,
+                /*
+                 * What this user may do, so the UI can leave out what it
+                 * cannot. A button that returns 403 reads as a bug rather than
+                 * as a boundary -- and the server still decides, this only
+                 * saves someone the trip.
+                 */
+                'abilities' => $user->abilities(),
             ],
             'teams' => $user->teams->map(fn (Team $team) => [
                 'id' => $team->id,

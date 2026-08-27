@@ -10,6 +10,7 @@ use App\Models\XAccount;
 use App\Models\XApp;
 use App\Observers\PostTargetObserver;
 use App\Observers\XAccountObserver;
+use App\Policies\LinkPolicy;
 use App\Policies\PostPolicy;
 use App\Policies\XAccountPolicy;
 use App\Policies\XAppPolicy;
@@ -88,6 +89,13 @@ class XpostServiceProvider extends ServiceProvider
         Gate::policy(Post::class, PostPolicy::class);
         Gate::policy(XAccount::class, XAccountPolicy::class);
         Gate::policy(XApp::class, XAppPolicy::class);
+
+        /*
+         * Short links have no model of their own -- they live in Cloudflare KV
+         * -- so the gates are named rather than bound to a class.
+         */
+        Gate::define('links.view', [LinkPolicy::class, 'viewAny']);
+        Gate::define('links.manage', [LinkPolicy::class, 'manage']);
     }
 
     /**

@@ -34,6 +34,8 @@ class LinkController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $this->authorize('links.view');
+
         if (! $this->kv->isConfigured()) {
             return $this->notConfigured();
         }
@@ -85,6 +87,8 @@ class LinkController extends Controller
      */
     public function domains(): JsonResponse
     {
+        $this->authorize('links.view');
+
         return response()->json(['data' => $this->domainList()]);
     }
 
@@ -144,6 +148,8 @@ class LinkController extends Controller
 
     public function storeDomain(Request $request): JsonResponse
     {
+        $this->authorize('links.manage');
+
         $data = $request->validate([
             'host' => ['required', 'string', 'max:253'],
             'label' => ['nullable', 'string', 'max:100'],
@@ -179,6 +185,8 @@ class LinkController extends Controller
 
     public function updateDomain(Request $request, LinkDomain $domain): JsonResponse
     {
+        $this->authorize('links.manage');
+
         $data = $request->validate([
             'is_default' => ['boolean'],
             'is_active' => ['boolean'],
@@ -196,6 +204,8 @@ class LinkController extends Controller
 
     public function destroyDomain(LinkDomain $domain): JsonResponse
     {
+        $this->authorize('links.manage');
+
         $domain->delete();
 
         // Never leave the list without a default: every short URL is built
@@ -209,6 +219,8 @@ class LinkController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $this->authorize('links.manage');
+
         if (! $this->kv->isConfigured()) {
             return $this->notConfigured();
         }
@@ -265,6 +277,8 @@ class LinkController extends Controller
      */
     public function shorten(Request $request): JsonResponse
     {
+        $this->authorize('links.manage');
+
         if (! $this->tiny->isEnabled()) {
             return response()->json(['message' => 'Chưa bật TinyURL. Đặt TINYURL_ENABLED=true trong .env.'], 422);
         }
@@ -336,6 +350,8 @@ class LinkController extends Controller
      */
     public function bulk(Request $request): JsonResponse
     {
+        $this->authorize('links.manage');
+
         if (! $this->kv->isConfigured()) {
             return $this->notConfigured();
         }
@@ -363,6 +379,8 @@ class LinkController extends Controller
 
     public function destroy(Request $request): JsonResponse
     {
+        $this->authorize('links.manage');
+
         if (! $this->kv->isConfigured()) {
             return $this->notConfigured();
         }

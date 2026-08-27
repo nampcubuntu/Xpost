@@ -12,8 +12,17 @@ export const useAuthStore = defineStore('auth', {
 
     getters: {
         currentTeam: (state) => state.teams.find((team) => team.id === state.user?.current_team_id) ?? null,
-        canEdit: (state) => ['owner', 'admin', 'editor'].includes(state.user?.role),
-        canManage: (state) => ['owner', 'admin'].includes(state.user?.role),
+        /*
+         * Read from the server rather than re-derived here.
+         *
+         * These were two hardcoded role lists, which is how the UI ends up
+         * disagreeing with the policies -- a role added on the server, or moved
+         * between levels, silently keeps the old answer on screen. TeamRole
+         * decides once and says so.
+         */
+        can: (state) => (ability) => state.user?.abilities?.[ability] === true,
+        canEdit: (state) => state.user?.abilities?.compose === true,
+        canManage: (state) => state.user?.abilities?.manage_accounts === true,
     },
 
     actions: {

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import BrandLogo from '../components/BrandLogo.vue';
@@ -25,6 +25,11 @@ watch(() => route.fullPath, () => {
  * Grouped the way X Ads Manager groups its sidebar, but every entry points at a
  * page that actually exists. Adding a "Shopping Manager" link that 404s would
  * look right and be useless.
+ *
+ * `ability` names what a row needs, matching TeamRole::abilities(). A member
+ * who cannot compose should not be shown a composer that refuses them: the
+ * server still decides, but a link that always 403s reads as a broken app
+ * rather than as a boundary.
  */
 const nav = [
     {
@@ -37,20 +42,28 @@ const nav = [
     {
         heading: 'Nội dung',
         items: [
-            { name: 'composer', label: 'Composer', icon: 'composer' },
-            { name: 'schedules', label: 'Lịch lặp lại', icon: 'schedules' },
+            { name: 'composer', label: 'Composer', icon: 'composer', ability: 'compose' },
+            { name: 'schedules', label: 'Lịch lặp lại', icon: 'schedules', ability: 'compose' },
         ],
     },
     {
         heading: 'Công cụ',
         items: [
-            { name: 'accounts', label: 'Tài khoản X', icon: 'accounts' },
-            { name: 'apps', label: 'X Apps', icon: 'apps' },
-            { name: 'proxies', label: 'Proxy', icon: 'proxy' },
-            { name: 'links', label: 'Short link', icon: 'globe' },
+            { name: 'accounts', label: 'Tài khoản X', icon: 'accounts', ability: 'manage_accounts' },
+            { name: 'apps', label: 'X Apps', icon: 'apps', ability: 'manage_infrastructure' },
+            { name: 'proxies', label: 'Proxy', icon: 'proxy', ability: 'manage_infrastructure' },
+            { name: 'links', label: 'Short link', icon: 'globe', ability: 'manage_infrastructure' },
         ],
     },
 ];
+
+/** The nav as this role sees it, with empty groups dropped entirely. */
+const visibleNav = computed(() => nav
+    .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => !item.ability || auth.can(item.ability)),
+    }))
+    .filter((group) => group.items.length > 0));
 
 async function logout() {
     await auth.logout();
@@ -137,7 +150,7 @@ async function logout() {
 
             <!-- Navigation -->
             <nav class="mt-1 flex-1 overflow-y-auto pb-4">
-                <template v-for="group in nav" :key="group.heading">
+                <template v-for="group in visibleNav" :key="group.heading">
                     <p class="px-3.5 pb-0.5 pt-4 text-[11.5px] text-neutral-400">{{ group.heading }}</p>
 
                     <!--

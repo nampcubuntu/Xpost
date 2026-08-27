@@ -8,6 +8,7 @@ use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
 use App\Models\LinkDomain;
 use App\Services\Links\CloudflareKvClient;
+use App\Services\Links\TinyUrlService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -26,7 +27,10 @@ class LinkController extends Controller
 {
     private const CODE_ALPHABET = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-    public function __construct(private readonly CloudflareKvClient $kv) {}
+    public function __construct(
+        private readonly CloudflareKvClient $kv,
+        private readonly TinyUrlService $tiny,
+    ) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -62,10 +66,13 @@ class LinkController extends Controller
             ];
         }
 
+        $domains = $this->domainList();
+
         return response()->json([
-            'data' => $rows,
+            'data' => $this->withTinyLinks($rows, $domains),
             'cursor' => $page['cursor'],
-            'domains' => $this->domainList(),
+            'domains' => $domains,
+            'tinyurl_enabled' => $this->tiny->isEnabled(),
         ]);
     }
 
@@ -79,6 +86,38 @@ class LinkController extends Controller
     public function domains(): JsonResponse
     {
         return response()->json(['data' => $this->domainList()]);
+    }
+
+    /**
+     * Attach the TinyURL already known for each row.
+     *
+     * Looked up, never minted: listing a page is a read, and opening it should
+     * not create codes for every row it happens to show.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     * @param  array<int, array<string, mixed>>  $domains
+     * @return array<int, array<string, mixed>>
+     */
+    private function withTinyLinks(array $rows, array $domains): array
+    {
+        $default = collect($domains)->firstWhere('is_default', true) ?? collect($domains)->first();
+
+        if ($default === null || ! $this->tiny->isEnabled()) {
+            return array_map(fn (array $row) => $row + ['tiny_url' => null], $rows);
+        }
+
+        $targets = [];
+
+        foreach ($rows as $row) {
+            $targets[$row['key']] = 'https://'.$default['host'].'/'.LinkDomain::pathFor($row['key']);
+        }
+
+        $known = $this->tiny->known(array_values($targets));
+
+        return array_map(
+            fn (array $row) => $row + ['tiny_url' => $known[$targets[$row['key']]] ?? null],
+            $rows,
+        );
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -194,7 +233,60 @@ class LinkController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['data' => ['key' => $key, 'value' => $value]], 201);
+        /*
+         * Shortened after the write, and best-effort: TinyURL being down must
+         * not undo an entry that was saved correctly. The row simply comes back
+         * without a tiny link, and the button on the page mints it later.
+         */
+        return response()->json(['data' => [
+            'key' => $key,
+            'value' => $value,
+            'tiny_url' => $this->tinyFor($key),
+        ]], 201);
+    }
+
+    /** The TinyURL for a key's short link, if shortening is switched on. */
+    private function tinyFor(string $key): ?string
+    {
+        if (! $this->tiny->isEnabled()) {
+            return null;
+        }
+
+        $domain = LinkDomain::query()->where('is_active', true)->orderByDesc('is_default')->first();
+
+        return $domain === null ? null : $this->tiny->shorten($domain->url($key));
+    }
+
+    /**
+     * Shorten the links on a page that do not have one yet.
+     *
+     * Separate from listing because it writes: opening a page should not mint
+     * codes for every row it happens to show.
+     */
+    public function shorten(Request $request): JsonResponse
+    {
+        if (! $this->tiny->isEnabled()) {
+            return response()->json(['message' => 'Chưa bật TinyURL. Đặt TINYURL_ENABLED=true trong .env.'], 422);
+        }
+
+        $data = $request->validate([
+            'keys' => ['required', 'array', 'min:1', 'max:200'],
+            'keys.*' => ['string', 'max:512'],
+        ]);
+
+        $domain = LinkDomain::query()->where('is_active', true)->orderByDesc('is_default')->first();
+
+        if ($domain === null) {
+            return response()->json(['message' => 'Chưa có domain nào để dựng short link.'], 422);
+        }
+
+        $result = [];
+
+        foreach ($data['keys'] as $key) {
+            $result[$key] = $this->tiny->shorten($domain->url($key));
+        }
+
+        return response()->json(['data' => $result]);
     }
 
     /**

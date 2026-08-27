@@ -176,6 +176,19 @@ return [
         // Where a short code resolves, e.g. https://l.example.com -- used to
         // build the URL a post carries, never to call Cloudflare.
         'base_url' => rtrim((string) env('XPOST_LINK_BASE_URL', ''), '/'),
+
+        /*
+         * Shortening the short link again, through TinyURL.
+         *
+         * The token is optional: without one the legacy endpoint is used, which
+         * needs no account but cannot set an alias or report clicks. Get a
+         * token at tinyurl.com/app/settings/api to lift both.
+         */
+        'tinyurl' => [
+            'enabled' => (bool) env('TINYURL_ENABLED', false),
+            'token' => env('TINYURL_TOKEN'),
+            'domain' => env('TINYURL_DOMAIN', 'tinyurl.com'),
+        ],
     ],
 
 ];

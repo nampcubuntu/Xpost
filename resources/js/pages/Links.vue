@@ -140,6 +140,45 @@ const valuePreview = computed(() => {
     return currentHost.value ? `${typed}|https://${currentHost.value.host}/` : typed;
 });
 
+/*
+ * TinyURL, minted with the entry and never on load.
+ *
+ * Listing a page is a read; TinyURL mints a new code per request, so shortening
+ * every row a page happens to show would leave a trail of unused codes behind
+ * each visit.
+ */
+const tinyEnabled = ref(false);
+
+async function shortenRows(keys) {
+    busy.value = true;
+
+    try {
+        const { data } = await api.post('links/shorten', { keys });
+
+        rows.value = rows.value.map((row) => (data.data[row.key]
+            ? { ...row, tiny_url: data.data[row.key] }
+            : row));
+
+        const made = Object.values(data.data).filter(Boolean).length;
+        flash.value = made
+            ? { type: 'ok', message: `Đã rút gọn ${made} link.` }
+            : { type: 'error', message: 'TinyURL không trả về link nào.' };
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không rút gọn được.' };
+    } finally {
+        busy.value = false;
+    }
+}
+
+/** Every row on this page that has no tiny link yet. */
+function shortenPage() {
+    const missing = rows.value.filter((row) => !row.tiny_url).map((row) => row.key);
+
+    if (missing.length) {
+        shortenRows(missing);
+    }
+}
+
 const bulkCount = computed(() => bulkText.value
     .split('\n')
     .filter((line) => line.includes('=') || line.includes('\t'))
@@ -156,6 +195,7 @@ async function load(nextCursor = null) {
         rows.value = data.data;
         cursor.value = data.cursor;
         domains.value = data.domains ?? [];
+        tinyEnabled.value = data.tinyurl_enabled === true;
         configured.value = true;
     } catch (error) {
         configured.value = error.response?.data?.configured !== false;
@@ -301,6 +341,16 @@ onMounted(load);
                         {{ domain.host }}
                     </option>
                 </select>
+
+                <button
+                    v-if="tinyEnabled"
+                    class="xp-btn-ghost"
+                    :disabled="busy || loading"
+                    title="Rút gọn mọi dòng trên trang này chưa có link tiny"
+                    @click="shortenPage"
+                >
+                    Rút gọn cả trang
+                </button>
 
                 <button class="xp-btn-ghost" @click="showDomains = !showDomains">
                     Domain ({{ activeDomains.length }})
@@ -448,33 +498,33 @@ onMounted(load);
 
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
-                <table class="w-full min-w-[920px] text-left text-[13px]">
+                <table class="w-full min-w-[1100px] text-left text-[13px]">
                     <thead class="border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
                         <tr>
                             <th class="px-4 py-2.5 font-medium">Key</th>
-                            <th class="px-4 py-2.5 font-medium">Short link</th>
                             <th class="px-4 py-2.5 font-medium">Value</th>
+                            <th class="px-4 py-2.5 font-medium">Short link</th>
+                            <th class="px-4 py-2.5 font-medium">Tiny</th>
                             <th class="w-24 px-4 py-2.5"></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
-                        <tr v-if="loading"><td colspan="4" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                        <tr v-if="loading"><td colspan="5" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
                         <tr v-else-if="!rows.length">
-                            <td colspan="4" class="px-4 py-8 text-center text-neutral-500">Chưa có cặp nào.</td>
+                            <td colspan="5" class="px-4 py-8 text-center text-neutral-500">Chưa có cặp nào.</td>
                         </tr>
 
                         <tr v-for="row in rows" :key="row.key" class="hover:bg-neutral-50">
                             <td class="whitespace-nowrap px-4 py-2.5 align-top font-mono">{{ row.key }}</td>
 
-                            <!--
-                                Its own column: this is the value that gets
-                                copied into a post, and reading it under the key
-                                meant scanning two lines per row to find it.
-                            -->
+                            <td class="px-4 py-2.5 align-top">
+                                <p class="break-all font-mono text-[12px] text-neutral-700">{{ row.value ?? '—' }}</p>
+                            </td>
+
                             <td class="px-4 py-2.5 align-top">
                                 <button
                                     v-if="shortUrl(row.key)"
-                                    class="flex items-center gap-1 font-mono text-[12px] text-blue-600 hover:underline"
+                                    class="flex items-center gap-1 whitespace-nowrap font-mono text-[12px] text-blue-600 hover:underline"
                                     :title="'Sao chép ' + shortUrl(row.key)"
                                     @click="copy(shortUrl(row.key))"
                                 >
@@ -484,8 +534,30 @@ onMounted(load);
                                 <span v-else class="text-[12px] text-neutral-400">chưa có domain</span>
                             </td>
 
+                            <!--
+                                Minted with the entry, or here for rows that
+                                predate it. Never on load: listing a page is a
+                                read, and TinyURL mints a new code per request.
+                            -->
                             <td class="px-4 py-2.5 align-top">
-                                <p class="break-all font-mono text-[12px] text-neutral-700">{{ row.value ?? '—' }}</p>
+                                <button
+                                    v-if="row.tiny_url"
+                                    class="flex items-center gap-1 whitespace-nowrap font-mono text-[12px] text-blue-600 hover:underline"
+                                    :title="'Sao chép ' + row.tiny_url"
+                                    @click="copy(row.tiny_url)"
+                                >
+                                    <NavIcon name="copy" :size="11" class="shrink-0" />
+                                    {{ row.tiny_url }}
+                                </button>
+                                <button
+                                    v-else-if="tinyEnabled"
+                                    class="whitespace-nowrap text-[12px] text-neutral-500 hover:underline disabled:opacity-50"
+                                    :disabled="busy"
+                                    @click="shortenRows([row.key])"
+                                >
+                                    Rút gọn
+                                </button>
+                                <span v-else class="text-[12px] text-neutral-400">—</span>
                             </td>
                             <td class="px-4 py-2.5 text-right align-top">
                                 <button class="text-red-600 hover:underline" :disabled="busy" @click="remove(row.key)">

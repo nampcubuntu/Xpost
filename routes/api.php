@@ -99,6 +99,9 @@ Route::prefix('v1')->group(function (): void {
             Route::get('links', [LinkController::class, 'index']);
             Route::post('links', [LinkController::class, 'store']);
             Route::post('links/bulk', [LinkController::class, 'bulk']);
+            // Separate from listing because it writes: opening a page should
+            // not mint TinyURL codes for every row it happens to show.
+            Route::post('links/shorten', [LinkController::class, 'shorten']);
             Route::delete('links', [LinkController::class, 'destroy']);
 
             /*

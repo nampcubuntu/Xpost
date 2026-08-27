@@ -548,7 +548,7 @@ async function remove(proxy) {
                                 -->
                                 <td class="px-4 py-2">
                                     <span v-if="account.proxy" class="text-neutral-600">
-                                        {{ account.proxy.label ?? `#${account.proxy.id}` }}
+                                        <span class="font-mono text-[12px]">{{ account.proxy.host }}:{{ account.proxy.port }}</span>
                                         <span class="text-xs text-neutral-400">{{ account.proxy.country || '' }}</span>
                                     </span>
                                     <span v-else class="text-xs text-amber-600">IP server</span>

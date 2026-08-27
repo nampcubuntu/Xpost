@@ -30,7 +30,7 @@ class AccountController extends Controller
         $this->authorize('viewAny', XAccount::class);
 
         $accounts = XAccount::query()
-            ->with(['app:id,name,tier', 'proxy:id,label,country,health_status', 'groups:id,name,color'])
+            ->with(['app:id,name,tier', 'proxy:id,label,host,port,country,health_status', 'groups:id,name,color'])
             ->search($request->query('search'))
             ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))
             ->when($request->query('app_id'), fn ($q, $id) => $q->where('x_app_id', $id))

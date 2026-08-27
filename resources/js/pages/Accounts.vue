@@ -450,8 +450,9 @@ async function connectAccount(flow) {
                     <option value="">Gán proxy…</option>
                     <option value="spread">Chia đều vào pool</option>
                     <option value="clear">— Bỏ proxy —</option>
+                    <!-- Named the same way the column names it, so the string you pick is the string you see. -->
                     <option v-for="proxy in assignableProxies" :key="proxy.id" :value="proxy.id">
-                        {{ proxy.label || `${proxy.host}:${proxy.port}` }}
+                        {{ proxy.host }}:{{ proxy.port }}
                         — {{ proxy.country || '?' }} · {{ proxy.assigned_count }}/{{ proxy.max_accounts }}
                     </option>
                 </select>
@@ -538,7 +539,13 @@ async function connectAccount(flow) {
                                         : account.proxy.health_status === 'dead' ? 'bg-red-500' : 'bg-neutral-300'"
                                     :title="account.proxy.health_status"
                                 ></span>
-                                <span class="text-neutral-700">{{ account.proxy.label ?? `#${account.proxy.id}` }}</span>
+                                <!--
+                                    The address, not the label. A pasted list
+                                    arrives without labels, and the question
+                                    this column answers is which IP the account
+                                    leaves from -- "#12" answers a different one.
+                                -->
+                                <span class="font-mono text-[12px] text-neutral-700">{{ account.proxy.host }}:{{ account.proxy.port }}</span>
                                 <span class="ml-1 text-xs text-neutral-500">{{ account.proxy.country || '' }}</span>
                             </template>
                             <span v-else class="text-xs text-amber-600" title="Đi ra bằng IP của server">IP server</span>

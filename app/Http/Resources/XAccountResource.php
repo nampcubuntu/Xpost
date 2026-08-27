@@ -49,9 +49,19 @@ class XAccountResource extends JsonResource
                 'name' => $this->app->name,
                 'tier' => $this->app->tier->value,
             ]),
+            /*
+             * host:port, not the label.
+             *
+             * A pasted list arrives without labels, so the row fell back to the
+             * row id -- "#12" names a database record, not an address, and the
+             * question being asked of this column is which IP this account
+             * leaves from.
+             */
             'proxy' => $this->whenLoaded('proxy', fn () => [
                 'id' => $this->proxy->id,
                 'label' => $this->proxy->label,
+                'host' => $this->proxy->host,
+                'port' => $this->proxy->port,
                 'country' => $this->proxy->country,
                 'health_status' => $this->proxy->health_status,
             ]),

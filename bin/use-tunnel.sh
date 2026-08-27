@@ -53,10 +53,32 @@ set_env FRONTEND_URL "$URL"
 # tunnel is pointed elsewhere.
 set_env SANCTUM_STATEFUL_DOMAINS "${HOST},localhost,localhost:8000,127.0.0.1,127.0.0.1:8000"
 
+# Laravel's Sentinel guard refuses /horizon whenever a `local` app is reached
+# from a public IP through a trusted proxy -- which is exactly what a tunnel
+# is. It answers a bare 401 that reads as a permissions bug and is not one:
+# the dashboard's own gate never gets to run, so no account can pass it. A
+# publicly reachable URL is no place for APP_DEBUG either.
+#
+# `staging` rather than `production`: config/horizon.php has supervisors for
+# it, and the strict model checks in XpostServiceProvider stay on.
+if [[ $TARGET == "off" ]]; then
+    set_env APP_ENV local
+    set_env APP_DEBUG true
+else
+    set_env APP_ENV staging
+    set_env APP_DEBUG false
+fi
+
 "$PHP" artisan config:clear >/dev/null
 
 echo "APP_URL  = $URL"
 echo "stateful = ${HOST},localhost,…"
+echo "env      = $(grep -E '^APP_ENV=' .env | cut -d= -f2)"
+echo
+# `artisan serve` hands APP_ENV to its child process from its own environment,
+# captured when it started -- so it keeps serving the old one however many
+# times .env changes underneath it.
+echo "⚠  Khởi động lại 'artisan serve' và Horizon để nhận APP_ENV mới."
 echo
 
 if [[ $TARGET != "off" ]]; then

@@ -82,6 +82,19 @@ final class XAdsApiClient
             'Authorization' => $this->signer()->authorizationHeader($method, $url, $params),
         ])->timeout((int) config('xpost.http.timeout', 30));
 
+        /*
+         * Through the account's proxy, the same as every other call it makes.
+         *
+         * A card is minted per publish, seconds before the post that carries
+         * it. Leaving this out meant the account reached X from its proxy and
+         * from the server's own address inside one operation -- which is a
+         * cleaner signal of automation than a shared IP ever was, and it
+         * silently undid the whole point of assigning a proxy at all.
+         */
+        if ($proxy = $this->account->proxy) {
+            $request = $request->withOptions(['proxy' => $proxy->toUri()]);
+        }
+
         $full = $params === [] ? $url : $url.'?'.http_build_query($params);
 
         $response = $json === []

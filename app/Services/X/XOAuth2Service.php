@@ -147,9 +147,22 @@ final class XOAuth2Service
                 throw new XAuthException('Account '.$account->handle().' cannot be refreshed.');
             }
 
+            /*
+             * Through the account's proxy, like everything else it does.
+             *
+             * A refresh is one of the few calls X sees from an account while it
+             * is otherwise idle, so it is a particularly clean sample of where
+             * that account lives. Having it come from the server address while
+             * every post comes from a proxy is worse than never using a proxy:
+             * it ties the whole pool back to one machine.
+             */
             $response = Http::asForm()
                 ->withBasicAuth((string) $app->client_id, (string) $app->client_secret)
                 ->retry(2, 500, throw: false)
+                ->when(
+                    $account->loadMissing('proxy')->proxy !== null,
+                    fn ($request) => $request->withOptions(['proxy' => $account->proxy->toUri()])
+                )
                 ->post(self::TOKEN_URL, [
                     'grant_type' => 'refresh_token',
                     'refresh_token' => $account->refresh_token,

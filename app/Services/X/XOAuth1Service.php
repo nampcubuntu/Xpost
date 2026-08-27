@@ -224,9 +224,18 @@ final class XOAuth1Service
         try {
             $url = 'https://ads-api.x.com/12/accounts';
 
+            // Through the proxy when there is one. A first connect has none
+            // yet; a reconnect of an account already placed in the pool does,
+            // and should not announce the server's address on the way back in.
             $response = Http::withHeaders([
                 'Authorization' => $signer->authorizationHeader('GET', $url),
-            ])->timeout((int) config('xpost.http.timeout', 30))->get($url);
+            ])
+                ->timeout((int) config('xpost.http.timeout', 30))
+                ->when(
+                    $account->loadMissing('proxy')->proxy !== null,
+                    fn ($request) => $request->withOptions(['proxy' => $account->proxy->toUri()])
+                )
+                ->get($url);
 
             /*
              * The same call answers a question nothing else could: whether this

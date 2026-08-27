@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\TeamRole;
 use App\Http\Controllers\Controller;
 use App\Models\Team;
 use App\Models\User;
@@ -52,6 +53,20 @@ class AuthController extends Controller
         return response()->json(status: 204);
     }
 
+    /**
+     * The account that owns every team, or null on a fresh install.
+     *
+     * Named by email rather than by "whoever has id 1", so restoring a database
+     * or seeding a demo cannot silently move it. Absent, registration falls
+     * back to making the registrant owner -- which is right exactly once.
+     */
+    private function platformOwner(): ?User
+    {
+        $email = (string) config('xpost.platform_owner_email');
+
+        return $email === '' ? null : User::query()->where('email', $email)->first();
+    }
+
     public function register(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -68,13 +83,37 @@ class AuthController extends Controller
                 'password' => $data['password'],
             ]);
 
+            /*
+             * Whoever runs Xpost owns every team; a customer signing up gets
+             * admin of their own.
+             *
+             * Admin is everything the work needs -- accounts, apps, budgets,
+             * publishing. The two things it withholds are the two that are not
+             * a customer's to make: deleting an X app, which orphans every
+             * account assigned to it, and appointing owners, which is how a
+             * tenant would otherwise hand itself the operator's position.
+             */
+            $platformOwner = $this->platformOwner();
+
             $team = Team::create([
                 'name' => $data['team_name'],
                 'slug' => Str::slug($data['team_name']).'-'.Str::lower(Str::random(6)),
-                'owner_id' => $user->id,
+                'owner_id' => $platformOwner?->id ?? $user->id,
             ]);
 
-            $team->members()->attach($user->id, ['role' => 'owner']);
+            /*
+             * The very first account to register has nobody above it, so it
+             * becomes the owner -- otherwise a fresh install would produce a
+             * team with no owner at all, which nothing could then repair.
+             */
+            $team->members()->attach($user->id, [
+                'role' => ($platformOwner === null ? TeamRole::Owner : TeamRole::Admin)->value,
+            ]);
+
+            if ($platformOwner !== null) {
+                $team->members()->attach($platformOwner->id, ['role' => TeamRole::Owner->value]);
+            }
+
             $user->forceFill(['current_team_id' => $team->id])->save();
 
             return $user;

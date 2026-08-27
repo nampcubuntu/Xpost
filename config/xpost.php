@@ -6,6 +6,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Platform owner
+    |--------------------------------------------------------------------------
+    | The account that owns every team. A customer signing up becomes admin of
+    | their own team, which is everything the work needs -- accounts, apps,
+    | budgets, publishing -- while withholding the two things that are not a
+    | tenant's to decide: deleting an X app, which orphans every account
+    | assigned to it, and appointing owners.
+    |
+    | Named by email rather than by an id, so restoring a database or reseeding
+    | a demo cannot quietly move it. Left blank, the first account to register
+    | becomes the owner of its own team, which is right exactly once.
+    */
+
+    'platform_owner_email' => env('XPOST_PLATFORM_OWNER_EMAIL'),
+
+    /*
+    |--------------------------------------------------------------------------
     | HTTP client
     |--------------------------------------------------------------------------
     | Applied to every outbound call to the X API. Timeouts are deliberately

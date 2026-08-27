@@ -504,7 +504,7 @@ onMounted(load);
                             <th class="px-4 py-2.5 font-medium">Key</th>
                             <th class="px-4 py-2.5 font-medium">Value</th>
                             <th class="px-4 py-2.5 font-medium">Short link</th>
-                            <th class="px-4 py-2.5 font-medium">Tiny</th>
+                            <th class="px-4 py-2.5 font-medium">TinyURL</th>
                             <th class="w-24 px-4 py-2.5"></th>
                         </tr>
                     </thead>

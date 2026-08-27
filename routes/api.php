@@ -128,6 +128,8 @@ Route::prefix('v1')->group(function (): void {
 
             Route::apiResource('proxies', ProxyController::class)->except(['show']);
             Route::post('proxies/bulk', [ProxyController::class, 'bulk']);
+            Route::post('proxies/check', [ProxyController::class, 'checkMany']);
+            Route::delete('proxies', [ProxyController::class, 'destroyMany']);
             Route::post('proxies/{proxy}/check', [ProxyController::class, 'check']);
 
             // ----- Media -----

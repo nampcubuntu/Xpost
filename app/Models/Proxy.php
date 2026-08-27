@@ -37,6 +37,7 @@ class Proxy extends Model
             'assigned_count' => 'integer',
             'latency_ms' => 'integer',
             'last_checked_at' => 'datetime',
+            'check_queued_at' => 'datetime',
             'geo_checked_at' => 'datetime',
         ];
     }

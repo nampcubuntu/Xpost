@@ -6,12 +6,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\ProxyScheme;
 use App\Http\Controllers\Controller;
+use App\Jobs\CheckProxy;
 use App\Models\Proxy;
 use App\Models\XAccount;
+use App\Services\Proxies\ProxyChecker;
 use App\Support\ProxyLine;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Validation\Rule;
 
 class ProxyController extends Controller
@@ -25,7 +27,25 @@ class ProxyController extends Controller
                 ->orderBy('label')
                 ->get(['id', 'label', 'scheme', 'host', 'port', 'country', 'is_active',
                     'health_status', 'latency_ms', 'assigned_count', 'max_accounts', 'last_checked_at',
-                    'exit_ip', 'region', 'city']),
+                    'exit_ip', 'region', 'city', 'check_queued_at']),
+        ]);
+    }
+
+    /**
+     * One row, checked now.
+     *
+     * Kept inline rather than queued: a single click should answer, and one
+     * proxy is fifteen seconds at worst. A selection goes through checkMany.
+     */
+    public function check(Proxy $proxy, ProxyChecker $checker): JsonResponse
+    {
+        $this->authorize('create', XAccount::class);
+
+        return response()->json($checker->check($proxy) + [
+            'exit_ip' => $proxy->exit_ip,
+            'country' => $proxy->country,
+            'region' => $proxy->region,
+            'city' => $proxy->city,
         ]);
     }
 
@@ -144,101 +164,78 @@ class ProxyController extends Controller
     }
 
     /**
-     * Live check against X itself rather than a generic IP echo service -- a
-     * proxy that reaches the internet but is blocked by X is still useless.
+     * A selection deleted in one go.
+     *
+     * Proxies still carrying accounts are left alone and named, rather than the
+     * whole request being refused: a selection of fifty where two are in use
+     * should delete forty-eight and say which two it kept.
      */
-    public function check(Proxy $proxy): JsonResponse
+    public function destroyMany(Request $request): JsonResponse
     {
         $this->authorize('create', XAccount::class);
 
-        $startedAt = hrtime(true);
+        $proxies = $this->selection($request);
 
-        try {
-            $response = Http::withOptions(['proxy' => $proxy->toUri()])
-                ->timeout(15)
-                ->get('https://api.x.com/2/openapi.json');
+        $inUse = $proxies->filter(fn (Proxy $proxy) => $proxy->assigned_count > 0);
+        $deletable = $proxies->reject(fn (Proxy $proxy) => $proxy->assigned_count > 0);
 
-            $latency = (int) ((hrtime(true) - $startedAt) / 1_000_000);
-            $healthy = $response->status() < 500;
+        Proxy::query()->whereKey($deletable->modelKeys())->delete();
 
-            $proxy->forceFill([
-                'health_status' => $healthy ? 'healthy' : 'degraded',
-                'latency_ms' => $latency,
-                'fail_count' => $healthy ? 0 : $proxy->fail_count + 1,
-                'last_checked_at' => now(),
-            ] + ($healthy ? $this->geolocate($proxy) : []))->save();
-
-            return response()->json([
-                'health_status' => $proxy->health_status,
-                'latency_ms' => $latency,
-                'status_code' => $response->status(),
-                'exit_ip' => $proxy->exit_ip,
-                'country' => $proxy->country,
-                'region' => $proxy->region,
-                'city' => $proxy->city,
-            ]);
-        } catch (\Throwable $e) {
-            $proxy->forceFill([
-                'health_status' => 'dead',
-                'fail_count' => $proxy->fail_count + 1,
-                'last_checked_at' => now(),
-            ])->save();
-
-            return response()->json(['health_status' => 'dead', 'error' => $e->getMessage()]);
-        }
+        return response()->json([
+            'deleted' => $deletable->count(),
+            'skipped' => $inUse->map(fn (Proxy $proxy) => [
+                'id' => $proxy->id,
+                'label' => $proxy->label ?? "{$proxy->host}:{$proxy->port}",
+                'reason' => __('xpost.errors.proxy_in_use'),
+            ])->values(),
+        ]);
     }
 
     /**
-     * Where the proxy comes out, asked through the proxy itself.
+     * One check per row, queued.
      *
-     * The country column was typed by hand, which makes it a note rather than a
-     * fact -- a seller's label and the exit IP disagree often enough that
-     * assigning accounts by country off the label is guesswork. The check is
-     * already talking to the internet from there, so it can ask.
+     * A dead proxy takes fifteen seconds to admit it, so a selection of a
+     * hundred does not fit in an HTTP request -- the page marks them queued and
+     * watches the verdicts arrive.
      *
-     * Failure is deliberately silent. A geo service being down says nothing
-     * about whether the proxy works, and letting it downgrade a healthy proxy
-     * would be the tail wagging the dog.
-     *
-     * @return array<string, string|null>
+     * The mark is set here rather than in the job so the row changes the moment
+     * the click lands. A queue that is backed up or stopped would otherwise
+     * look exactly like a click that did nothing.
      */
-    private function geolocate(Proxy $proxy): array
+    public function checkMany(Request $request): JsonResponse
     {
-        $endpoint = (string) config('xpost.proxies.geo_endpoint');
+        $this->authorize('create', XAccount::class);
 
-        if ($endpoint === '') {
-            return [];
+        $proxies = $this->selection($request);
+
+        Proxy::query()->whereKey($proxies->modelKeys())->update(['check_queued_at' => now()]);
+
+        foreach ($proxies as $proxy) {
+            CheckProxy::dispatch($proxy->id, $proxy->team_id);
         }
 
-        try {
-            $body = Http::withOptions(['proxy' => $proxy->toUri()])
-                ->timeout(10)
-                ->get($endpoint)
-                ->json();
-        } catch (\Throwable) {
-            return [];
-        }
+        return response()->json(['queued' => $proxies->count()], 202);
+    }
 
-        // ipwho.is answers 200 with success:false for a rate limit or a
-        // reserved address, so the status code alone is not the verdict.
-        if (! is_array($body) || ($body['success'] ?? true) === false) {
-            return [];
-        }
+    /**
+     * The rows a bulk action names, scoped to the team.
+     *
+     * whereKey after the team scope rather than trusting the ids: they arrive
+     * from the browser, and an id from another team must find nothing rather
+     * than something.
+     *
+     * @return Collection<int, Proxy>
+     */
+    private function selection(Request $request): object
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:2000'],
+            'ids.*' => ['integer'],
+        ]);
 
-        /*
-         * Read under several spellings so the endpoint can be swapped without
-         * touching code: ipwho.is and ipapi.co say country_code and region,
-         * ip-api.com says countryCode and regionName.
-         */
-        $country = $body['country_code'] ?? $body['countryCode'] ?? null;
-
-        return array_filter([
-            'exit_ip' => $body['ip'] ?? $body['query'] ?? null,
-            'country' => is_string($country) ? strtoupper(substr($country, 0, 2)) : null,
-            'region' => $body['region'] ?? $body['regionName'] ?? null,
-            'city' => $body['city'] ?? null,
-            'geo_checked_at' => now(),
-        ], fn ($value) => filled($value));
+        return Proxy::query()
+            ->whereKey($data['ids'])
+            ->get(['id', 'team_id', 'label', 'host', 'port', 'assigned_count']);
     }
 
     /** The unique index, as a string: host, port and username identify a row. */

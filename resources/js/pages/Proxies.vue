@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import api, { validationErrors } from '../lib/api';
 
 const proxies = ref([]);
@@ -12,6 +12,17 @@ const busy = ref(false);
 const editing = ref(null);
 const errors = ref({});
 const checking = ref(new Set());
+const selected = ref(new Set());
+
+/*
+ * The rows the page is still waiting on a verdict for.
+ *
+ * A checked selection runs on the queue, so the answers arrive after the
+ * response does. Something has to say "asked, not answered yet" or a click on
+ * fifty rows looks like a click that did nothing.
+ */
+const pending = computed(() => proxies.value.filter((proxy) => proxy.check_queued_at));
+const allSelected = computed(() => proxies.value.length > 0 && selected.value.size === proxies.value.length);
 
 const blank = () => ({
     label: '',
@@ -40,6 +51,11 @@ async function load() {
     try {
         const { data } = await api.get('proxies');
         proxies.value = data.data;
+
+        // Drop anything that has since been deleted, or the count in the
+        // action bar promises rows the next action cannot find.
+        const live = new Set(proxies.value.map((proxy) => proxy.id));
+        selected.value = new Set([...selected.value].filter((id) => live.has(id)));
     } finally {
         loading.value = false;
     }
@@ -105,6 +121,80 @@ async function addBulk() {
         await load();
     } catch (error) {
         bulkResult.value = { created: 0, updated: 0, skipped: [], message: error.response?.data?.message ?? 'Không thêm được.' };
+    } finally {
+        busy.value = false;
+    }
+}
+
+function toggle(id) {
+    selected.value.has(id) ? selected.value.delete(id) : selected.value.add(id);
+    selected.value = new Set(selected.value);
+}
+
+function toggleAll() {
+    selected.value = allSelected.value ? new Set() : new Set(proxies.value.map((proxy) => proxy.id));
+}
+
+/**
+ * Poll while anything is still queued, and stop the moment nothing is.
+ *
+ * Every request costs a full round trip behind a tunnel, so this exists only
+ * for as long as there is an answer outstanding -- never as a background timer
+ * ticking over an idle page.
+ */
+let pollTimer;
+
+function pollWhilePending() {
+    clearTimeout(pollTimer);
+
+    if (!pending.value.length) {
+        return;
+    }
+
+    pollTimer = setTimeout(async () => {
+        await load();
+        pollWhilePending();
+    }, 4000);
+}
+
+onUnmounted(() => clearTimeout(pollTimer));
+
+async function checkSelected() {
+    busy.value = true;
+
+    try {
+        await api.post('proxies/check', { ids: [...selected.value] });
+        await load();
+        pollWhilePending();
+    } finally {
+        busy.value = false;
+    }
+}
+
+async function removeSelected() {
+    const count = selected.value.size;
+
+    // Confirmed because accounts are assigned to these: a proxy deleted out
+    // from under them is a publish that starts failing tomorrow.
+    if (!window.confirm(`Xoá ${count} proxy đã chọn?`)) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        const { data } = await api.delete('proxies', { data: { ids: [...selected.value] } });
+
+        // Named, not counted: "2 bị bỏ qua" is not something anyone can act on.
+        if (data.skipped.length) {
+            window.alert(
+                `Đã xoá ${data.deleted}. Còn ${data.skipped.length} proxy đang gán tài khoản:\n\n`
+                + data.skipped.map((row) => `• ${row.label}`).join('\n')
+            );
+        }
+
+        selected.value = new Set();
+        await load();
     } finally {
         busy.value = false;
     }
@@ -270,11 +360,36 @@ async function remove(proxy) {
             </div>
         </form>
 
+        <!--
+            Only present when there is a selection. A permanently visible bar
+            with disabled buttons is a row of things you cannot do.
+        -->
+        <div
+            v-if="selected.size"
+            class="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-neutral-900/10 bg-neutral-900 px-4 py-2.5 text-[13px] text-white"
+        >
+            <span class="font-medium">Đã chọn {{ selected.size }}</span>
+            <button class="rounded px-2 py-1 transition hover:bg-white/15" :disabled="busy" @click="checkSelected">
+                Kiểm tra
+            </button>
+            <button class="rounded px-2 py-1 text-red-300 transition hover:bg-white/15" :disabled="busy" @click="removeSelected">
+                Xoá
+            </button>
+            <button class="ml-auto text-white/60 transition hover:text-white" @click="selected = new Set()">Bỏ chọn</button>
+        </div>
+
+        <p v-if="pending.length" class="mb-3 text-[12.5px] text-neutral-500">
+            Đang kiểm tra {{ pending.length }} proxy trong hàng đợi — kết quả hiện dần, không cần chờ ở đây.
+        </p>
+
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
             <table class="w-full min-w-[720px] text-left text-[13px]">
                 <thead class="border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
                     <tr>
+                        <th class="w-10 pl-4 pr-1 py-2.5">
+                            <input type="checkbox" :checked="allSelected" class="align-middle" @change="toggleAll">
+                        </th>
                         <th class="px-4 py-2.5 font-medium">Proxy</th>
                         <th class="px-4 py-2.5 font-medium">Vị trí</th>
                         <th class="px-4 py-2.5 font-medium">Tình trạng</th>
@@ -284,10 +399,13 @@ async function remove(proxy) {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-neutral-100">
-                    <tr v-if="loading"><td colspan="6" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
-                    <tr v-else-if="!proxies.length"><td colspan="6" class="px-4 py-8 text-center text-neutral-500">Chưa có proxy nào.</td></tr>
+                    <tr v-if="loading"><td colspan="7" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                    <tr v-else-if="!proxies.length"><td colspan="7" class="px-4 py-8 text-center text-neutral-500">Chưa có proxy nào.</td></tr>
 
-                    <tr v-for="proxy in proxies" :key="proxy.id" class="hover:bg-neutral-50">
+                    <tr v-for="proxy in proxies" :key="proxy.id" class="hover:bg-neutral-50" :class="selected.has(proxy.id) ? 'bg-neutral-50' : ''">
+                        <td class="w-10 py-3 pl-4 pr-1">
+                            <input type="checkbox" :checked="selected.has(proxy.id)" class="align-middle" @change="toggle(proxy.id)">
+                        </td>
                         <td class="px-4 py-3">
                             <p class="font-medium">{{ proxy.label || `${proxy.host}:${proxy.port}` }}</p>
                             <p class="text-xs text-neutral-500">{{ proxy.scheme }}://{{ proxy.host }}:{{ proxy.port }}</p>
@@ -307,7 +425,16 @@ async function remove(proxy) {
                             <p v-if="proxy.exit_ip" class="font-mono text-xs text-neutral-500">{{ proxy.exit_ip }}</p>
                         </td>
                         <td class="px-4 py-3">
-                            <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="healthClass[proxy.health_status]">
+                            <!--
+                                The previous verdict stays readable while a new
+                                one is being worked out -- "đang kiểm tra" that
+                                erased what was there would lose the only thing
+                                on the row worth knowing.
+                            -->
+                            <span v-if="proxy.check_queued_at" class="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                                đang kiểm tra…
+                            </span>
+                            <span v-else class="rounded-full px-2 py-0.5 text-xs font-medium" :class="healthClass[proxy.health_status]">
                                 {{ proxy.health_status }}
                             </span>
                         </td>

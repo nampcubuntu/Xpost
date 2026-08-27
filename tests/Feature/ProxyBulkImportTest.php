@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\CheckProxy;
 use App\Models\Proxy;
 use App\Models\Team;
+use App\Support\TeamContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -216,5 +219,90 @@ class ProxyBulkImportTest extends TestCase
             ->assertJsonPath('health_status', 'dead');
 
         Http::assertNotSent(fn ($request) => str_contains($request->url(), 'ipwho.is'));
+    }
+
+    #[Test]
+    public function a_selection_is_queued_for_checking(): void
+    {
+        /*
+         * Queued rather than checked inline: a dead proxy takes fifteen seconds
+         * to admit it, so a selection of a hundred does not fit in a request.
+         */
+        Queue::fake();
+
+        $ids = collect(range(1, 3))->map(fn () => $this->proxy()->id)->all();
+
+        $this->postJson('/api/v1/proxies/check', ['ids' => $ids])
+            ->assertStatus(202)
+            ->assertJsonPath('queued', 3);
+
+        Queue::assertPushed(CheckProxy::class, 3);
+
+        /*
+         * Marked here rather than in the job, so the row changes the moment the
+         * click lands. A queue that is stopped would otherwise look exactly
+         * like a click that did nothing.
+         */
+        $this->assertSame(3, Proxy::query()->whereNotNull('check_queued_at')->count());
+    }
+
+    #[Test]
+    public function another_teams_proxy_cannot_be_queued_by_id(): void
+    {
+        // The ids arrive from a browser. One from another team must find
+        // nothing rather than something.
+        Queue::fake();
+
+        [$other] = $this->tenant();
+        $stranger = Proxy::factory()->create(['team_id' => $other->id]);
+
+        // tenant() moved the context; put it back before acting as the caller.
+        TeamContext::set($this->team->id);
+
+        $this->postJson('/api/v1/proxies/check', ['ids' => [$stranger->id]])
+            ->assertStatus(202)
+            ->assertJsonPath('queued', 0);
+
+        Queue::assertNothingPushed();
+        $this->assertNull($stranger->fresh()->check_queued_at);
+    }
+
+    #[Test]
+    public function a_selection_is_deleted_in_one_go(): void
+    {
+        $ids = collect(range(1, 3))->map(fn () => $this->proxy()->id)->all();
+
+        $this->deleteJson('/api/v1/proxies', ['ids' => $ids])
+            ->assertOk()
+            ->assertJsonPath('deleted', 3);
+
+        $this->assertSame(0, Proxy::query()->count());
+    }
+
+    #[Test]
+    public function proxies_still_carrying_accounts_are_kept_and_named(): void
+    {
+        /*
+         * Rather than refusing the whole request: a selection of fifty where
+         * two are in use should delete forty-eight and say which two it kept.
+         */
+        $free = $this->proxy(['assigned_count' => 0]);
+        $inUse = $this->proxy(['assigned_count' => 4, 'label' => 'Proxy đang dùng']);
+
+        $this->deleteJson('/api/v1/proxies', ['ids' => [$free->id, $inUse->id]])
+            ->assertOk()
+            ->assertJsonPath('deleted', 1)
+            ->assertJsonCount(1, 'skipped')
+            ->assertJsonPath('skipped.0.label', 'Proxy đang dùng');
+
+        $this->assertNull($free->fresh());
+        $this->assertNotNull($inUse->fresh());
+    }
+
+    #[Test]
+    public function a_bulk_action_needs_at_least_one_id(): void
+    {
+        // An empty selection is a bug in the caller, not a no-op to absorb.
+        $this->deleteJson('/api/v1/proxies', ['ids' => []])->assertStatus(422);
     }
 }

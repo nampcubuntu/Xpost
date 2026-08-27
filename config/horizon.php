@@ -277,7 +277,9 @@ return [
 
         'metrics' => [
             'connection' => 'redis',
-            'queue' => ['metrics', 'default'],
+            // Proxy checks ride here too: both are background chores, and
+            // `auto` balancing keeps a big check batch from starving metrics.
+            'queue' => ['metrics', 'default', 'proxies'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'minProcesses' => 1,

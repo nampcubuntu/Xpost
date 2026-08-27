@@ -86,12 +86,17 @@ class WebsiteDestinationTest extends TestCase
         ], $attributes));
     }
 
-    /** A media row already uploaded to X, so the publisher does not re-upload. */
+    /**
+     * A media row already uploaded to X, so the publisher does not re-upload.
+     *
+     * Keyed by account: X scopes an upload to whoever made it, so a second
+     * account on the same app cannot attach the first one's media.
+     */
     private function uploadedMedia(): PostMedia
     {
         return PostMedia::factory()->create([
             'team_id' => $this->team->id,
-            'x_media_ids' => [$this->account->id => '999888777'],
+            'x_media_ids' => ['media:account:'.$this->account->id => '999888777'],
         ]);
     }
 

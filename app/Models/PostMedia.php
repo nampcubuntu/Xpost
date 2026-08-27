@@ -55,16 +55,15 @@ class PostMedia extends Model
         return route('media.file', $this);
     }
 
-    /** X media_id values are scoped to the app that uploaded them. */
-    public function mediaIdFor(int $appId): ?string
+    /**
+     * X media ids for this file, keyed by who uploaded it and in what form.
+     *
+     * X scopes an uploaded file to the uploading user, so these are per
+     * account rather than per app -- a second account on the same app cannot
+     * attach the first one's media. XMediaUploader owns the keys.
+     */
+    public function mediaIdFor(XAccount $account, string $kind = 'media'): ?string
     {
-        return data_get($this->x_media_ids, (string) $appId);
-    }
-
-    public function rememberMediaId(int $appId, string $mediaId): void
-    {
-        $map = $this->x_media_ids ?? [];
-        $map[(string) $appId] = $mediaId;
-        $this->forceFill(['x_media_ids' => $map])->save();
+        return data_get($this->x_media_ids, $kind.':account:'.$account->id);
     }
 }

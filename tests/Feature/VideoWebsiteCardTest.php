@@ -76,7 +76,7 @@ class VideoWebsiteCardTest extends TestCase
     /** An account able to build cards: ads account, OAuth 1.0a, token secret. */
     private function adsAccount(array $overrides = []): XAccount
     {
-        return XAccount::factory()->create(array_merge([
+        $account = XAccount::factory()->create(array_merge([
             'team_id' => $this->team->id,
             'x_app_id' => $this->xApp->id,
             'ads_account_id' => '18ce55wllne',
@@ -84,6 +84,30 @@ class VideoWebsiteCardTest extends TestCase
             'access_token' => 'token',
             'token_secret' => 'secret',
         ], $overrides));
+
+        $this->pretendUploaded($account);
+
+        return $account;
+    }
+
+    /**
+     * Pre-cache every fixture file against this account, so the uploader never
+     * reaches for bytes that are not on disk.
+     *
+     * Done here rather than when the media is created because X scopes an
+     * upload to the account that made it -- the cache key needs an account,
+     * and in these tests the media is built first.
+     */
+    private function pretendUploaded(XAccount $account): void
+    {
+        foreach (PostMedia::query()->get() as $media) {
+            $isVideo = str_starts_with((string) $media->mime, 'video/');
+
+            $media->forceFill(['x_media_ids' => array_merge($media->x_media_ids ?? [], [
+                'media:account:'.$account->id => $isVideo ? '999' : '888',
+                'amplify:account:'.$account->id => '13_999',
+            ])])->save();
+        }
     }
 
     private function video(): PostMedia
@@ -91,8 +115,6 @@ class VideoWebsiteCardTest extends TestCase
         return PostMedia::factory()->create([
             'team_id' => $this->team->id,
             'mime' => 'video/mp4',
-            // Pre-cached so the uploader never reaches for the file on disk.
-            'x_media_ids' => ['amplify:'.$this->xApp->id => '13_999'],
         ]);
     }
 
@@ -249,7 +271,6 @@ class VideoWebsiteCardTest extends TestCase
 
         $this->fakeX();
         $media = $this->video();
-        $media->forceFill(['x_media_ids' => [$this->xApp->id => '999']])->save();
 
         $body = $this->publish($this->target($this->adsAccount(['ads_account_id' => null]), [
             'rendered_body' => 'Xem clip',
@@ -270,7 +291,6 @@ class VideoWebsiteCardTest extends TestCase
 
         $this->fakeX();
         $media = $this->video();
-        $media->forceFill(['x_media_ids' => [$this->xApp->id => '999']])->save();
 
         $account = $this->adsAccount([
             'credential_type' => CredentialType::OAuth2,
@@ -296,7 +316,6 @@ class VideoWebsiteCardTest extends TestCase
         $image = PostMedia::factory()->create([
             'team_id' => $this->team->id,
             'mime' => 'image/jpeg',
-            'x_media_ids' => [$this->xApp->id => '888'],
         ]);
 
         $body = $this->publish($this->target($this->adsAccount(), [
@@ -316,9 +335,6 @@ class VideoWebsiteCardTest extends TestCase
         config(['xpost.publishing.destination_render' => 'auto']);
 
         $media = $this->video();
-        $media->forceFill([
-            'x_media_ids' => ['amplify:'.$this->xApp->id => '13_999', $this->xApp->id => '999'],
-        ])->save();
 
         Http::fake([
             'ads-api.x.com/*' => Http::response(['errors' => [['message' => 'nope']]], 500),

@@ -29,24 +29,11 @@ final class XMediaUploader
     public function __construct(private readonly XApiClientFactory $clients) {}
 
     /**
-     * Upload once per app, then reuse. Returns the X media_id.
+     * Upload once per account, then reuse. Returns the X media_id.
      */
     public function ensureUploaded(PostMedia $media, XAccount $account): string
     {
-        $appId = $account->x_app_id;
-
-        if ($appId === null) {
-            throw new XApiException('Account '.$account->handle().' is not bound to an X app.');
-        }
-
-        if ($cached = $media->mediaIdFor($appId)) {
-            return $cached;
-        }
-
-        $mediaId = $this->upload($media, $account);
-        $media->rememberMediaId($appId, $mediaId);
-
-        return $mediaId;
+        return $this->cached($media, $account, 'media', fn () => $this->upload($media, $account));
     }
 
     /**
@@ -61,25 +48,48 @@ final class XMediaUploader
      */
     public function ensureAmplifyUploaded(PostMedia $media, XAccount $account): string
     {
-        $appId = $account->x_app_id;
+        return $this->cached($media, $account, 'amplify', fn () => $this->upload(
+            $media, $account, MediaCategory::AmplifyVideo, wantKey: true,
+        ));
+    }
 
-        if ($appId === null) {
+    /**
+     * Look up this account's id for the file, uploading it if there is not one.
+     *
+     * Keyed by account, not by app.
+     *
+     * X scopes an uploaded file to the user who uploaded it, so a second
+     * account on the same app cannot attach the first one's media -- it is
+     * refused as "Invalid media: 13_...", which names an id that plainly
+     * exists and says nothing about whose it is. Sharing one app across a pool
+     * of accounts made that collision the normal case rather than an edge one.
+     *
+     * The cost is real: one video published from a thousand accounts is a
+     * thousand uploads. Cards are the exception, and the reason they matter at
+     * scale -- a card owns its media, so one card publishes from any number of
+     * accounts without re-uploading anything.
+     *
+     * @param  callable(): string  $upload
+     */
+    private function cached(PostMedia $media, XAccount $account, string $kind, callable $upload): string
+    {
+        if ($account->x_app_id === null) {
             throw new XApiException('Account '.$account->handle().' is not bound to an X app.');
         }
 
-        $cacheKey = 'amplify:'.$appId;
+        $key = $kind.':account:'.$account->id;
 
-        if ($cached = data_get($media->x_media_ids, $cacheKey)) {
+        if ($cached = data_get($media->x_media_ids, $key)) {
             return $cached;
         }
 
-        $mediaKey = $this->upload($media, $account, MediaCategory::AmplifyVideo, wantKey: true);
+        $id = $upload();
 
         $map = $media->x_media_ids ?? [];
-        $map[$cacheKey] = $mediaKey;
+        $map[$key] = $id;
         $media->forceFill(['x_media_ids' => $map])->save();
 
-        return $mediaKey;
+        return $id;
     }
 
     public function upload(

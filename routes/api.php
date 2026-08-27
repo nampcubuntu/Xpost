@@ -76,6 +76,10 @@ Route::prefix('v1')->group(function (): void {
             Route::get('accounts/stats', [AccountController::class, 'stats']);
             Route::post('accounts/bulk', [AccountController::class, 'bulk']);
             Route::post('accounts/rebalance', [AccountController::class, 'rebalance']);
+
+            // Asked live rather than stored: one Ads API call per account, so
+            // it happens when someone opens the picker, never per list row.
+            Route::get('accounts/{account}/ads-accounts', [AccountController::class, 'adsAccounts']);
             Route::apiResource('accounts', AccountController::class)->except(['store']);
 
             Route::apiResource('account-groups', AccountGroupController::class)->except(['show']);

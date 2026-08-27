@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Enums\AccountStatus;
+use App\Enums\CredentialType;
+use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\XAccountResource;
 use App\Jobs\RefreshAccountToken;
 use App\Models\XAccount;
 use App\Services\X\TimezoneGuesser;
+use App\Services\X\XAdsAccountLister;
 use App\Services\X\XAppSelector;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -70,6 +73,35 @@ class AccountController extends Controller
         $account->fill($data)->save();
 
         return XAccountResource::make($account->fresh(['app', 'proxy', 'groups']));
+    }
+
+    /**
+     * The ads accounts this account can actually reach, asked live.
+     *
+     * Not stored, and not folded into the accounts list: it is one Ads API call
+     * per account, which a page of fifty rows cannot afford and a pool of ten
+     * thousand certainly cannot. Fetched only when someone opens the picker.
+     *
+     * Connecting picks one automatically, which is right when there is exactly
+     * one and a guess when there is more than one -- and the wrong guess is
+     * only discovered when a card fails at publish.
+     */
+    public function adsAccounts(XAccount $account, XAdsAccountLister $lister): JsonResponse
+    {
+        $this->authorize('update', $account);
+
+        if ($account->credential_type !== CredentialType::OAuth1 || blank($account->token_secret)) {
+            return response()->json([
+                'message' => 'Tài khoản này nối bằng OAuth 2.0. Ads API chỉ nhận OAuth 1.0a — nối lại bằng nút "Kết nối tài khoản".',
+                'data' => [],
+            ], 422);
+        }
+
+        try {
+            return response()->json(['data' => $lister->forAccount($account)]);
+        } catch (XApiException $e) {
+            return response()->json(['message' => $e->getMessage(), 'data' => []], 422);
+        }
     }
 
     public function destroy(XAccount $account): JsonResponse

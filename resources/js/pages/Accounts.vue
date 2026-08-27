@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import api from '../lib/api';
 import TimezoneSelect from '../components/TimezoneSelect.vue';
 
@@ -121,6 +121,56 @@ const sourceStyle = {
     country: 'text-amber-600',
     proxy: 'text-amber-600',
 };
+
+/*
+ * Ads accounts, per row, fetched on demand.
+ *
+ * One Ads API call each, so a page of fifty rows cannot ask for all of them and
+ * a pool of ten thousand certainly cannot. Kept out of the accounts payload for
+ * that reason and loaded only when someone opens a picker.
+ */
+const adsOptions = reactive({});
+const adsError = reactive({});
+const adsLoading = ref(null);
+
+async function loadAdsAccounts(account) {
+    adsLoading.value = account.id;
+    delete adsError[account.id];
+
+    try {
+        const { data } = await api.get(`accounts/${account.id}/ads-accounts`);
+
+        if (! data.data.length) {
+            adsError[account.id] = 'Tài khoản này chưa có ads account nào ở ads.x.com.';
+
+            return;
+        }
+
+        adsOptions[account.id] = data.data;
+    } catch (error) {
+        adsError[account.id] = error.response?.data?.message ?? 'Không đọc được danh sách.';
+    } finally {
+        adsLoading.value = null;
+    }
+}
+
+async function setAdsAccount(account, adsAccountId) {
+    const previous = account.ads_account_id;
+    account.ads_account_id = adsAccountId || null;
+
+    try {
+        await api.put(`accounts/${account.id}`, { ads_account_id: adsAccountId || null });
+        flash.value = {
+            type: 'ok',
+            message: adsAccountId
+                ? `${account.handle} sẽ đúc card qua ${adsAccountId}.`
+                : `${account.handle} sẽ không đúc card nữa.`,
+        };
+    } catch (error) {
+        account.ads_account_id = previous;
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không lưu được.' };
+    }
+}
 
 /** Correct one row without going through the bulk toolbar. */
 async function setTimezone(account, timezone) {
@@ -340,6 +390,7 @@ async function connectAccount(flow) {
                         <th class="px-4 py-2.5 font-medium">Tài khoản</th>
                         <th class="px-4 py-2.5 font-medium">Trạng thái</th>
                         <th class="px-4 py-2.5 font-medium">X App</th>
+                        <th class="px-4 py-2.5 font-medium">Ads account</th>
                         <th class="px-4 py-2.5 font-medium">Sức khoẻ</th>
                         <th class="px-4 py-2.5 font-medium">Hạn mức/ngày</th>
                         <th class="px-4 py-2.5 font-medium">Múi giờ</th>
@@ -347,9 +398,9 @@ async function connectAccount(flow) {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-neutral-100">
-                    <tr v-if="loading"><td colspan="8" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                    <tr v-if="loading"><td colspan="9" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
                     <tr v-else-if="!accounts.length">
-                        <td colspan="8" class="px-4 py-8 text-center text-neutral-500">
+                        <td colspan="9" class="px-4 py-8 text-center text-neutral-500">
                             Chưa có tài khoản nào. Kết nối qua OAuth, hoặc import hàng loạt bằng
                             <code class="rounded bg-neutral-100 px-1">php artisan xpost:import-accounts</code>.
                         </td>
@@ -375,6 +426,50 @@ async function connectAccount(flow) {
                             </span>
                         </td>
                         <td class="px-4 py-2.5 text-neutral-600">{{ account.app?.name ?? '—' }}</td>
+
+                        <!--
+                            Which ads account mints this account's cards.
+                            Connecting picks one automatically, which is right
+                            when there is exactly one and a guess when there is
+                            more -- and the wrong guess is only found when a
+                            card fails at publish.
+
+                            The list is fetched on click, never with the page:
+                            it is one Ads API call per account.
+                        -->
+                        <td class="px-4 py-2.5">
+                            <select
+                                v-if="adsOptions[account.id]"
+                                class="xp-field min-w-[190px] py-1 text-[12.5px]"
+                                :value="account.ads_account_id ?? ''"
+                                @change="setAdsAccount(account, $event.target.value)"
+                            >
+                                <option value="">không dùng card</option>
+                                <option v-for="ads in adsOptions[account.id]" :key="ads.id" :value="ads.id">
+                                    {{ ads.name }} — {{ ads.id }}{{ ads.approval_status === 'ACCEPTED' ? '' : ' (chưa duyệt)' }}
+                                </option>
+                            </select>
+
+                            <button
+                                v-else
+                                class="text-left text-[12.5px] text-blue-600 hover:underline disabled:text-neutral-400 disabled:no-underline"
+                                :disabled="adsLoading === account.id"
+                                @click="loadAdsAccounts(account)"
+                            >
+                                <span v-if="adsLoading === account.id">Đang hỏi X…</span>
+                                <span v-else-if="account.ads_account_id" class="font-mono text-neutral-700">
+                                    {{ account.ads_account_id }}
+                                </span>
+                                <span v-else>chọn…</span>
+                            </button>
+
+                            <p v-if="adsError[account.id]" class="mt-0.5 max-w-[220px] text-[11px] text-red-600">
+                                {{ adsError[account.id] }}
+                            </p>
+                            <p v-else-if="!account.ads_account_id && !adsOptions[account.id]" class="mt-0.5 text-[11px] text-neutral-400">
+                                chưa có — không đúc được card
+                            </p>
+                        </td>
                         <td class="px-4 py-2.5">
                             <div class="flex items-center gap-1.5">
                                 <div class="h-1.5 w-12 overflow-hidden rounded-full bg-neutral-200">

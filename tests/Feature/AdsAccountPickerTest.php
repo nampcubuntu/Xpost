@@ -132,6 +132,57 @@ class AdsAccountPickerTest extends TestCase
     }
 
     #[Test]
+    public function an_id_typed_by_hand_is_checked_against_x(): void
+    {
+        /*
+         * X's account list leaves out ads accounts that work. One was missing
+         * from it, answered NOT_FOUND when asked for by id, and minted cards
+         * without complaint -- all measured against the same live account in
+         * the same minute. So a named id is checked on the one endpoint that
+         * told the truth, rather than looked up in a list that did not.
+         */
+        Http::fake([
+            'ads-api.x.com/12/accounts/18ce55ocexb/authenticated_user_access' => Http::response([
+                'data' => ['user_id' => '1', 'permissions' => ['ACCOUNT_ADMIN']],
+            ]),
+            'ads-api.x.com/12/accounts/18ce55ocexb' => Http::response([
+                'errors' => [['code' => 'NOT_FOUND', 'message' => 'Account was not found']],
+            ], 403),
+            'ads-api.x.com/*' => Http::response(['data' => []]),
+        ]);
+
+        $this->actingAs($this->user)
+            ->getJson("/api/v1/accounts/{$this->account()->id}/ads-accounts?ads_account_id=18ce55ocexb")
+            ->assertOk()
+            ->assertJsonPath('data.0.id', '18ce55ocexb')
+            ->assertJsonPath('data.0.usable', true);
+    }
+
+    #[Test]
+    public function an_id_the_account_does_not_administer_is_refused(): void
+    {
+        // Being able to name someone else's ads account is not access to it.
+        Http::fake(['ads-api.x.com/*' => Http::response([
+            'data' => ['user_id' => '1', 'permissions' => ['ACCOUNT_ANALYST']],
+        ])]);
+
+        $this->actingAs($this->user)
+            ->getJson("/api/v1/accounts/{$this->account()->id}/ads-accounts?ads_account_id=someone-else")
+            ->assertStatus(422)
+            ->assertJsonPath('data', []);
+    }
+
+    #[Test]
+    public function a_named_id_x_refuses_outright_is_not_offered(): void
+    {
+        Http::fake(['ads-api.x.com/*' => Http::response(['errors' => [['message' => 'no']]], 403)]);
+
+        $this->actingAs($this->user)
+            ->getJson("/api/v1/accounts/{$this->account()->id}/ads-accounts?ads_account_id=nope")
+            ->assertStatus(422);
+    }
+
+    #[Test]
     public function the_choice_is_saved_on_the_account(): void
     {
         $account = $this->account(['ads_account_id' => 'old-one']);

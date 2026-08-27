@@ -131,17 +131,27 @@ const sourceStyle = {
  */
 const adsOptions = reactive({});
 const adsError = reactive({});
+const adsManual = reactive({});
 const adsLoading = ref(null);
 
-async function loadAdsAccounts(account) {
+async function loadAdsAccounts(account, adsAccountId = null) {
     adsLoading.value = account.id;
     delete adsError[account.id];
 
     try {
-        const { data } = await api.get(`accounts/${account.id}/ads-accounts`);
+        const { data } = await api.get(`accounts/${account.id}/ads-accounts`, {
+            params: { ads_account_id: adsAccountId || undefined },
+        });
 
         if (! data.data.length) {
-            adsError[account.id] = 'Tài khoản này chưa có ads account nào ở ads.x.com.';
+            /*
+             * Not proof there is none. X's list leaves out ads accounts that
+             * work -- one was missing from it, answered NOT_FOUND when asked
+             * for by id, and minted cards without complaint. So offer the way
+             * round it rather than declaring the account has nothing.
+             */
+            adsError[account.id] = 'X không liệt kê ads account nào. Nếu bạn biết ID (ví dụ 18ce55ocexb), nhập vào ô bên dưới.';
+            adsManual[account.id] = adsManual[account.id] ?? '';
 
             return;
         }
@@ -149,8 +159,26 @@ async function loadAdsAccounts(account) {
         adsOptions[account.id] = data.data;
     } catch (error) {
         adsError[account.id] = error.response?.data?.message ?? 'Không đọc được danh sách.';
+        adsManual[account.id] = adsManual[account.id] ?? '';
     } finally {
         adsLoading.value = null;
+    }
+}
+
+/** Check an id typed by hand, then offer it like any other. */
+async function verifyAdsAccount(account) {
+    const id = (adsManual[account.id] ?? '').trim();
+
+    if (! id) {
+        return;
+    }
+
+    await loadAdsAccounts(account, id);
+
+    if (adsOptions[account.id]) {
+        delete adsError[account.id];
+        delete adsManual[account.id];
+        await setAdsAccount(account, id);
     }
 }
 
@@ -463,9 +491,33 @@ async function connectAccount(flow) {
                                 <span v-else>chọn…</span>
                             </button>
 
-                            <p v-if="adsError[account.id]" class="mt-0.5 max-w-[220px] text-[11px] text-red-600">
+                            <p v-if="adsError[account.id]" class="mt-0.5 max-w-[230px] text-[11px] text-red-600">
                                 {{ adsError[account.id] }}
                             </p>
+
+                            <!--
+                                A way round X's own list, which leaves out ads
+                                accounts that work. Checked before it is saved,
+                                so a typo cannot be stored as a real id.
+                            -->
+                            <form
+                                v-if="adsManual[account.id] !== undefined"
+                                class="mt-1 flex gap-1"
+                                @submit.prevent="verifyAdsAccount(account)"
+                            >
+                                <input
+                                    v-model="adsManual[account.id]"
+                                    type="text"
+                                    class="xp-field w-[130px] py-1 font-mono text-[12px]"
+                                    placeholder="18ce55ocexb"
+                                >
+                                <button
+                                    class="rounded-md border border-neutral-300 px-2 text-[12px] hover:bg-neutral-50 disabled:opacity-50"
+                                    :disabled="adsLoading === account.id"
+                                >
+                                    Kiểm tra
+                                </button>
+                            </form>
                             <p v-else-if="!account.ads_account_id && !adsOptions[account.id]" class="mt-0.5 text-[11px] text-neutral-400">
                                 chưa có — không đúc được card
                             </p>

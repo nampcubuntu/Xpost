@@ -86,7 +86,7 @@ class AccountController extends Controller
      * one and a guess when there is more than one -- and the wrong guess is
      * only discovered when a card fails at publish.
      */
-    public function adsAccounts(XAccount $account, XAdsAccountLister $lister): JsonResponse
+    public function adsAccounts(Request $request, XAccount $account, XAdsAccountLister $lister): JsonResponse
     {
         $this->authorize('update', $account);
 
@@ -95,6 +95,25 @@ class AccountController extends Controller
                 'message' => 'Tài khoản này nối bằng OAuth 2.0. Ads API chỉ nhận OAuth 1.0a — nối lại bằng nút "Kết nối tài khoản".',
                 'data' => [],
             ], 422);
+        }
+
+        /*
+         * A specific id, checked rather than looked up.
+         *
+         * X's account list leaves out ads accounts that work: one was missing
+         * from the list and answered NOT_FOUND when asked for by id, while
+         * reporting ACCOUNT_ADMIN and minting cards without complaint. So
+         * someone who knows their id has to be able to say it.
+         */
+        if ($request->filled('ads_account_id')) {
+            $verified = $lister->verify($account, (string) $request->query('ads_account_id'));
+
+            return $verified === null
+                ? response()->json([
+                    'message' => 'Tài khoản này không có quyền quản trị trên ads account đó.',
+                    'data' => [],
+                ], 422)
+                : response()->json(['data' => [$verified]]);
         }
 
         try {

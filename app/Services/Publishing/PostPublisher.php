@@ -34,6 +34,9 @@ final class PostPublisher
     /** @var array<int, PostMedia|null> keyed by target id */
     private array $mediaCache = [];
 
+    /** What refused the last card build, when something did. */
+    private ?string $cardError = null;
+
     public function __construct(
         private readonly XApiClientFactory $clients,
         private readonly XAppSelector $apps,
@@ -45,6 +48,10 @@ final class PostPublisher
 
     public function publish(PostTarget $target): PublishOutcome
     {
+        // The instance is reused across targets in a worker; a reason left over
+        // from the last one would be reported against this one.
+        $this->cardError = null;
+
         $target->loadMissing(['account.app', 'account.proxy', 'post']);
         $account = $target->account;
 
@@ -113,12 +120,7 @@ final class PostPublisher
                 $this->limiter->releaseAccountSlot($account);
                 $this->limiter->releaseAppSlot($app);
 
-                return $this->fail(
-                    $target,
-                    'card_unavailable',
-                    'Bài này cấu hình chỉ đăng dạng card, nhưng '.$account->handle()
-                    .' chưa có Ads account + OAuth 1.0a nên không tạo được card.',
-                );
+                return $this->fail($target, 'card_unavailable', $this->cardFailureReason($account));
             }
 
             // A card supplies its own media; uploading it twice would cost an
@@ -235,6 +237,8 @@ final class PostPublisher
 
             return $cardUri;
         } catch (\Throwable $e) {
+            $this->cardError = $e->getMessage();
+
             Log::channel('xpost')->warning('Card build failed, publishing without one', [
                 'target_id' => $target->id,
                 'account_id' => $account->id,
@@ -243,6 +247,25 @@ final class PostPublisher
 
             return null;
         }
+    }
+
+    /**
+     * Why the card never happened, in the words of whatever refused it.
+     *
+     * Worth the extra branch: the message reaches the failed column, and one
+     * that blames a missing ads account for a video X could not transcode
+     * sends whoever reads it to the wrong place entirely. That is not
+     * hypothetical -- it happened, against an account that had every
+     * credential the message said it lacked.
+     */
+    private function cardFailureReason(XAccount $account): string
+    {
+        if ($this->cardError !== null) {
+            return 'Không tạo được card cho '.$account->handle().': '.$this->cardError;
+        }
+
+        return 'Bài này cấu hình chỉ đăng dạng card, nhưng '.$account->handle()
+            .' chưa có Ads account + OAuth 1.0a nên không tạo được card.';
     }
 
     /**

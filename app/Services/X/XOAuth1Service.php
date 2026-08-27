@@ -212,6 +212,12 @@ final class XOAuth1Service
      * Best-effort on purpose. An account with no ads account is still perfectly
      * good for publishing -- it just cannot mint, so refusing the whole connect
      * over it would be wrong.
+     *
+     * approval_status is deliberately not a filter. It gates running ads, not
+     * creating creative, and a REJECTED account mints cards perfectly well --
+     * measured, after an earlier version of this method threw one away and
+     * reported the account as having no ads access at all. ACCEPTED is only
+     * preferred when there is a choice.
      */
     private function attachAdsAccount(XAccount $account, XOAuth1Signer $signer): void
     {
@@ -226,12 +232,12 @@ final class XOAuth1Service
                 return;
             }
 
-            foreach ((array) $response->json('data') as $ads) {
-                if (($ads['approval_status'] ?? null) === 'ACCEPTED' && ! ($ads['deleted'] ?? false)) {
-                    $account->forceFill(['ads_account_id' => $ads['id']])->save();
+            $usable = collect((array) $response->json('data'))
+                ->reject(fn (array $ads) => (bool) ($ads['deleted'] ?? false))
+                ->sortByDesc(fn (array $ads) => ($ads['approval_status'] ?? null) === 'ACCEPTED');
 
-                    return;
-                }
+            if ($usable->isNotEmpty()) {
+                $account->forceFill(['ads_account_id' => $usable->first()['id']])->save();
             }
         } catch (\Throwable $e) {
             Log::channel('xpost')->info('Không đọc được ads account khi kết nối', [

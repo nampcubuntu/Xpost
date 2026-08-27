@@ -338,6 +338,56 @@ class VideoWebsiteCardTest extends TestCase
     }
 
     #[Test]
+    public function a_refused_card_reports_what_actually_refused_it(): void
+    {
+        /*
+         * The message reaches the failed column, and one that blames a missing
+         * ads account for a video X could not transcode sends whoever reads it
+         * to the wrong place entirely. That happened here, against an account
+         * that had every credential the message said it lacked.
+         */
+        $media = $this->video();
+
+        Http::fake([
+            'ads-api.x.com/*' => Http::response(
+                ['errors' => [['message' => 'Media transcoding failed: unknown']]], 400
+            ),
+            'api.x.com/2/tweets' => Http::response(['data' => ['id' => '777']], 201),
+        ]);
+
+        $target = $this->target($this->adsAccount(), [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+        ]);
+
+        app(PostPublisher::class)->publish($target->fresh());
+
+        $message = $target->fresh()->error_message;
+
+        $this->assertStringContainsString('Media transcoding failed', $message);
+        $this->assertStringNotContainsString('chưa có Ads account', $message);
+    }
+
+    #[Test]
+    public function an_account_that_cannot_mint_still_says_so(): void
+    {
+        // The other half: nothing refused the card because nothing was tried.
+        $this->fakeX();
+        $media = $this->video();
+
+        $target = $this->target($this->adsAccount(['ads_account_id' => null]), [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+        ]);
+
+        app(PostPublisher::class)->publish($target->fresh());
+
+        $this->assertStringContainsString('chưa có Ads account', $target->fresh()->error_message);
+    }
+
+    #[Test]
     public function a_minted_card_is_remembered_on_the_target(): void
     {
         // publish() runs again on every retry. Without this the card is minted

@@ -199,12 +199,30 @@ class XOAuth1ConnectTest extends TestCase
     }
 
     #[Test]
-    public function a_pending_ads_account_is_not_attached(): void
+    public function an_unapproved_ads_account_is_still_attached(): void
     {
-        // Minting through an unapproved account fails; leaving the id null is
-        // the honest answer.
+        /*
+         * approval_status gates running ads, not creating creative. A REJECTED
+         * account mints cards perfectly well -- measured against a live one,
+         * after an earlier version of this filtered on ACCEPTED and reported a
+         * usable account as having no ads access at all.
+         */
         $this->stubs = ['ads-api.x.com/12/accounts' => Http::response(['data' => [
-            ['id' => '18ce55wllne', 'approval_status' => 'PENDING', 'deleted' => false],
+            ['id' => '18ce55x0crz', 'approval_status' => 'REJECTED', 'deleted' => false],
+        ]])];
+        $this->fakeX();
+
+        $service = app(XOAuth1Service::class);
+        $service->authorizationUrl($this->xApp);
+
+        $this->assertSame('18ce55x0crz', $service->handleCallback('reqtok', 'v')->ads_account_id);
+    }
+
+    #[Test]
+    public function a_deleted_ads_account_is_skipped(): void
+    {
+        $this->stubs = ['ads-api.x.com/12/accounts' => Http::response(['data' => [
+            ['id' => 'gone', 'approval_status' => 'ACCEPTED', 'deleted' => true],
         ]])];
         $this->fakeX();
 
@@ -212,6 +230,22 @@ class XOAuth1ConnectTest extends TestCase
         $service->authorizationUrl($this->xApp);
 
         $this->assertNull($service->handleCallback('reqtok', 'v')->ads_account_id);
+    }
+
+    #[Test]
+    public function an_approved_ads_account_wins_when_there_is_a_choice(): void
+    {
+        // Unapproved works, but approved is the one that also runs ads.
+        $this->stubs = ['ads-api.x.com/12/accounts' => Http::response(['data' => [
+            ['id' => 'rejected-one', 'approval_status' => 'REJECTED', 'deleted' => false],
+            ['id' => 'accepted-one', 'approval_status' => 'ACCEPTED', 'deleted' => false],
+        ]])];
+        $this->fakeX();
+
+        $service = app(XOAuth1Service::class);
+        $service->authorizationUrl($this->xApp);
+
+        $this->assertSame('accepted-one', $service->handleCallback('reqtok', 'v')->ads_account_id);
     }
 
     #[Test]

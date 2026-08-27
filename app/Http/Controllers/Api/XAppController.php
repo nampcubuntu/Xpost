@@ -132,6 +132,9 @@ class XAppController extends Controller
                     ->ignore($existing?->id),
             ],
             'tier' => [$existing ? 'sometimes' : 'required', Rule::enum(XAppTier::class)],
+            // X shows this as a plain number; kept as a string so nothing
+            // reformats or truncates an id that is only ever compared by eye.
+            'provider_app_id' => ['nullable', 'string', 'max:32', 'regex:/^\d+$/'],
             'client_id' => ['nullable', 'string', 'max:255'],
             'client_secret' => ['nullable', 'string', 'max:255'],
             'consumer_key' => ['nullable', 'string', 'max:255'],

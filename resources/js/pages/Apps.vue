@@ -11,6 +11,7 @@ const flash = ref(null);
 
 const blank = () => ({
     name: '',
+    provider_app_id: '',
     tier: 'basic',
     client_id: '',
     client_secret: '',
@@ -140,6 +141,27 @@ async function connect(app) {
                 <span v-if="errors.name" class="text-xs text-red-600">{{ errors.name }}</span>
             </label>
 
+            <!--
+                Ads API access is granted per app, and X names apps by this
+                number in its mail. Without it here, "your app 33347024 has been
+                provided with Standard Ads API access" cannot be matched to any
+                row -- and connecting accounts through the wrong app produces
+                cards that only fail at publish.
+            -->
+            <label class="space-y-1">
+                <span class="xp-label">App ID trên X</span>
+                <input
+                    v-model="form.provider_app_id"
+                    type="text"
+                    inputmode="numeric"
+                    class="xp-field"
+                    placeholder="33347024"
+                >
+                <span class="text-xs text-neutral-500">
+                    Số hiển thị ở developer.x.com. Chỉ để đối chiếu, không dùng để gọi API.
+                </span>
+            </label>
+
             <label class="space-y-1">
                 <span class="xp-label">Tier</span>
                 <select v-model="form.tier" class="xp-field">
@@ -222,12 +244,27 @@ async function connect(app) {
                     <tr v-for="app in apps" :key="app.id" class="hover:bg-neutral-50">
                         <td class="px-4 py-3">
                             <p class="font-medium">{{ app.name }}</p>
-                            <p class="text-xs uppercase text-neutral-500">{{ app.tier }}</p>
+                            <p class="text-xs uppercase text-neutral-500">
+                                {{ app.tier }}
+                                <span v-if="app.provider_app_id" class="normal-case text-neutral-400">
+                                    · ID {{ app.provider_app_id }}
+                                </span>
+                            </p>
                         </td>
                         <td class="px-4 py-3">
                             <span v-if="app.has_oauth2" class="mr-1 rounded bg-green-50 px-1.5 py-0.5 text-xs text-green-700">OAuth 2.0</span>
                             <span v-if="app.has_oauth1" class="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">OAuth 1.0a</span>
                             <span v-if="!app.has_oauth2 && !app.has_oauth1" class="text-xs text-red-600">Thiếu credential</span>
+
+                            <!--
+                                Observed, not configured: X answers 403 on the
+                                Ads API for an app without access, so the first
+                                OAuth 1.0a connect through this app settles it.
+                                Only an app with access can mint cards.
+                            -->
+                            <p v-if="app.ads_api_access === true" class="mt-1 text-xs text-green-700">Ads API ✓</p>
+                            <p v-else-if="app.ads_api_access === false" class="mt-1 text-xs text-red-600">Không có Ads API</p>
+                            <p v-else class="mt-1 text-xs text-neutral-400">Ads API: chưa rõ</p>
                         </td>
                         <td class="px-4 py-3">
                             <div class="flex items-center gap-2">

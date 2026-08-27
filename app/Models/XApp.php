@@ -25,6 +25,9 @@ class XApp extends Model
 
     protected $fillable = [
         'team_id', 'name', 'tier', 'client_id', 'client_secret',
+        // The numeric App ID from X's developer portal. Only ever read by a
+        // human matching a row against mail from X, which names apps by it.
+        'provider_app_id',
         'consumer_key', 'consumer_secret', 'callback_url', 'scopes',
         'daily_post_cap', 'monthly_post_cap', 'max_accounts', 'weight', 'is_active',
         // Set when the app is created and again by the monthly budget reset in
@@ -43,6 +46,9 @@ class XApp extends Model
             'consumer_secret' => 'encrypted',
             'scopes' => 'array',
             'is_active' => 'boolean',
+            // null means never checked; false means X refused the Ads API.
+            'ads_api_access' => 'boolean',
+            'ads_api_checked_at' => 'datetime',
             'daily_post_cap' => 'integer',
             'monthly_post_cap' => 'integer',
             'monthly_posts_used' => 'integer',

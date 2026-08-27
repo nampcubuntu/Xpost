@@ -228,6 +228,16 @@ final class XOAuth1Service
                 'Authorization' => $signer->authorizationHeader('GET', $url),
             ])->timeout((int) config('xpost.http.timeout', 30))->get($url);
 
+            /*
+             * The same call answers a question nothing else could: whether this
+             * app has Ads API access at all. X grants that per app and names
+             * apps by a numeric id nothing here stored, so an app without it
+             * was indistinguishable from an account without an ads account --
+             * until a publish failed. A 403 is the app; a 200 with an empty
+             * list is the account.
+             */
+            $this->recordAdsApiAccess($account->app, ! $response->forbidden());
+
             if ($response->failed()) {
                 return;
             }
@@ -245,6 +255,14 @@ final class XOAuth1Service
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    private function recordAdsApiAccess(?XApp $app, bool $granted): void
+    {
+        $app?->forceFill([
+            'ads_api_access' => $granted,
+            'ads_api_checked_at' => now(),
+        ])->save();
     }
 
     /** @return array<string, mixed> */

@@ -20,10 +20,16 @@ class XAppResource extends JsonResource
         return [
             'id' => $this->id,
             'name' => $this->name,
+            // X's own numeric App ID, for matching this row against the
+            // developer portal and against mail from X, which names apps by it.
+            'provider_app_id' => $this->provider_app_id,
             'tier' => $this->tier->value,
             'client_id' => $this->client_id,
             'has_oauth2' => $this->supportsOAuth2(),
             'has_oauth1' => $this->supportsOAuth1(),
+            // null until an OAuth 1.0a connect has run through this app.
+            'ads_api_access' => $this->ads_api_access,
+            'ads_api_checked_at' => $this->ads_api_checked_at?->toIso8601String(),
             'callback_url' => $this->callback_url,
             'scopes' => $this->scopes,
 

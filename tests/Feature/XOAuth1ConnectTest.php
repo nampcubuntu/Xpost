@@ -219,6 +219,55 @@ class XOAuth1ConnectTest extends TestCase
     }
 
     #[Test]
+    public function connecting_records_whether_the_app_has_ads_api_access(): void
+    {
+        /*
+         * X grants Ads API access per app and names apps by a numeric id
+         * nothing here stored, so an app without access was indistinguishable
+         * from an account without an ads account until a publish failed. The
+         * lookup that runs anyway settles it.
+         */
+        $this->fakeX();
+
+        $service = app(XOAuth1Service::class);
+        $service->authorizationUrl($this->xApp);
+        $service->handleCallback('reqtok', 'v');
+
+        $this->assertTrue($this->xApp->fresh()->ads_api_access);
+        $this->assertNotNull($this->xApp->fresh()->ads_api_checked_at);
+    }
+
+    #[Test]
+    public function a_forbidden_ads_api_marks_the_app_as_lacking_access(): void
+    {
+        // 403 is the app; a 200 with an empty list would be the account.
+        $this->stubs = ['ads-api.x.com/12/accounts' => Http::response(['errors' => [['message' => 'no']]], 403)];
+        $this->fakeX();
+
+        $service = app(XOAuth1Service::class);
+        $service->authorizationUrl($this->xApp);
+        $service->handleCallback('reqtok', 'v');
+
+        $this->assertFalse($this->xApp->fresh()->ads_api_access);
+    }
+
+    #[Test]
+    public function an_account_with_no_ads_account_leaves_app_access_intact(): void
+    {
+        // An empty list means the person owns no ads account -- it says
+        // nothing about the app, which answered perfectly well.
+        $this->stubs = ['ads-api.x.com/12/accounts' => Http::response(['data' => []])];
+        $this->fakeX();
+
+        $service = app(XOAuth1Service::class);
+        $service->authorizationUrl($this->xApp);
+        $account = $service->handleCallback('reqtok', 'v');
+
+        $this->assertTrue($this->xApp->fresh()->ads_api_access);
+        $this->assertNull($account->ads_account_id);
+    }
+
+    #[Test]
     public function a_deleted_ads_account_is_skipped(): void
     {
         $this->stubs = ['ads-api.x.com/12/accounts' => Http::response(['data' => [

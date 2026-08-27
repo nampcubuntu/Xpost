@@ -237,7 +237,7 @@ class PostScheduleController extends Controller
             'times.*' => ['regex:/^\d{1,2}:\d{2}$/'],
             'days_of_week' => ['nullable', 'array', 'max:7'],
             'days_of_week.*' => ['integer', 'between:1,7'],
-            'timezone' => ['nullable', 'timezone'],
+            'timezone' => ['nullable', 'timezone:all_with_bc'],
             'starts_on' => ['nullable', 'date'],
             'ends_on' => ['nullable', 'date', 'after_or_equal:starts_on'],
             'is_active' => ['boolean'],

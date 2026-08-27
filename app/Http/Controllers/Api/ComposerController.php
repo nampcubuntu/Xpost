@@ -97,7 +97,7 @@ class ComposerController extends Controller
             'audience' => ['required', 'array'],
             'audience.mode' => ['required', 'in:all,groups,accounts,filter'],
             'schedule_mode' => ['nullable', 'string'],
-            'timezone' => ['nullable', 'timezone'],
+            'timezone' => ['nullable', 'timezone:all_with_bc'],
             'scheduled_at' => ['nullable', 'date'],
             'window_ends_at' => ['nullable', 'date'],
             'jitter_seconds' => ['nullable', 'integer', 'min:0'],

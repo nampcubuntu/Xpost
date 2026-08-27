@@ -63,7 +63,7 @@ class AccountController extends Controller
         $data = $request->validate([
             'daily_post_cap' => ['integer', 'min:0', 'max:2000'],
             'status' => [Rule::enum(AccountStatus::class)],
-            'timezone' => ['nullable', 'timezone'],
+            'timezone' => ['nullable', 'timezone:all_with_bc'],
             // X Ads account id, e.g. 18ce55wllne -- lets this account build cards.
             'ads_account_id' => ['nullable', 'string', 'max:32'],
             // Scoped to the team, not just to the table: an id from a browser
@@ -166,7 +166,7 @@ class AccountController extends Controller
             'group_id' => ['nullable', 'integer', $onTeam('account_groups')],
             'proxy_id' => ['nullable', 'integer', $onTeam('proxies')],
             'daily_post_cap' => ['nullable', 'integer', 'min:0', 'max:2000'],
-            'timezone' => ['nullable', 'timezone'],
+            'timezone' => ['nullable', 'timezone:all_with_bc'],
         ]);
 
         if ($data['action'] === 'assign_proxy' && ($data['proxy_id'] ?? null) === null) {

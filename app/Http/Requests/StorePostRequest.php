@@ -62,7 +62,23 @@ class StorePostRequest extends FormRequest
             'window_ends_at' => ['nullable', 'date', 'after:scheduled_at'],
             'jitter_seconds' => ['integer', 'min:0', 'max:86400'],
             'per_minute_cap' => ['nullable', 'integer', 'min:1', 'max:10000'],
-            'timezone' => ['nullable', 'timezone'],
+            /*
+             * all_with_bc, because the browser is where this value comes from
+             * and browsers still hand out the legacy names.
+             *
+             * The composer defaults to Intl.DateTimeFormat().resolvedOptions()
+             * .timeZone, which on a machine in Vietnam can answer Asia/Saigon
+             * rather than Asia/Ho_Chi_Minh. PHP accepts Asia/Saigon and gives
+             * it the identical offset and transitions; only the bare rule
+             * refuses it, because that lists DateTimeZone::ALL and the
+             * backward-compatibility aliases are deliberately not in it.
+             *
+             * So the composer refused to save with "must be a valid timezone"
+             * about a timezone PHP itself considers valid, on the one machine
+             * that could not choose a different answer. 179 aliases are in the
+             * same position -- Asia/Calcutta, Europe/Kiev, Asia/Rangoon.
+             */
+            'timezone' => ['nullable', 'timezone:all_with_bc'],
 
             'audience' => ['required', 'array'],
             'audience.mode' => ['required', 'in:all,groups,accounts,filter'],

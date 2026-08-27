@@ -188,6 +188,85 @@ class LinkStoreTest extends TestCase
     }
 
     #[Test]
+    public function a_key_typed_without_its_prefix_gets_one(): void
+    {
+        /*
+         * Nobody types the prefix, and a key saved without it is invisible to
+         * every prefix filter -- which is how a namespace ends up holding
+         * entries nobody can find again.
+         */
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true])]);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['key' => '095Lrdja', 'value' => 'https://a|https://b'])
+            ->assertCreated()
+            ->assertJsonPath('data.key', 'r:095Lrdja');
+    }
+
+    #[Test]
+    public function a_key_that_already_has_a_prefix_is_left_alone(): void
+    {
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true])]);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['key' => 'x:custom', 'value' => 'https://a|https://b'])
+            ->assertCreated()
+            ->assertJsonPath('data.key', 'x:custom');
+    }
+
+    #[Test]
+    public function one_url_gets_the_default_domain_appended(): void
+    {
+        // Every existing entry pairs with it, and typing it a hundred times is
+        // how a typo gets in.
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true])]);
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['value' => 'https://imgur.com/a/l8qLXZa'])
+            ->assertCreated()
+            ->assertJsonPath('data.value', 'https://imgur.com/a/l8qLXZa|https://twvideo.top/');
+    }
+
+    #[Test]
+    public function a_value_that_already_has_both_halves_is_left_alone(): void
+    {
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true])]);
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['value' => 'https://img|https://elsewhere.com/'])
+            ->assertCreated()
+            ->assertJsonPath('data.value', 'https://img|https://elsewhere.com/');
+    }
+
+    #[Test]
+    public function a_bulk_paste_is_shaped_the_same_way(): void
+    {
+        // A hundred keys landing without their prefix is exactly what a paste
+        // would otherwise do.
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true])]);
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links/bulk', ['pairs' => [
+                ['key' => 'abc', 'value' => 'https://imgur.com/a/one'],
+            ]])
+            ->assertOk();
+
+        Http::assertSent(function ($request) {
+            if (! str_contains($request->url(), '/bulk')) {
+                return false;
+            }
+
+            return $request->data()[0] === [
+                'key' => 'r:abc',
+                'value' => 'https://imgur.com/a/one|https://twvideo.top/',
+            ];
+        });
+    }
+
+    #[Test]
     public function a_key_left_blank_is_generated(): void
     {
         // The key is a lookup handle; nobody should invent one at a time.

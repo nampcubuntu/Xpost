@@ -110,6 +110,32 @@ async function removeDomain(domain) {
     }
 }
 
+/*
+ * What the two fields will actually be saved as.
+ *
+ * The server does this shaping too and is the authority; this is here so it is
+ * visible while typing rather than a surprise in the row that appears after.
+ */
+const keyPreview = computed(() => {
+    const typed = newKey.value.trim();
+
+    if (!typed) {
+        return 'r:<tự sinh>';
+    }
+
+    return typed.includes(':') ? typed : `r:${typed}`;
+});
+
+const valuePreview = computed(() => {
+    const typed = newValue.value.trim();
+
+    if (!typed || typed.includes('|')) {
+        return typed;
+    }
+
+    return currentHost.value ? `${typed}|https://${currentHost.value.host}/` : typed;
+});
+
 const bulkCount = computed(() => bulkText.value
     .split('\n')
     .filter((line) => line.includes('=') || line.includes('\t'))
@@ -381,20 +407,32 @@ onMounted(load);
         </div>
 
         <!-- Add one -->
-        <div class="xp-card mb-4 grid gap-3 p-4 sm:grid-cols-[220px_1fr_auto]">
-            <label class="space-y-1">
-                <span class="xp-label">Key</span>
-                <input v-model="newKey" class="xp-field font-mono text-[13px]" placeholder="để trống = tự sinh">
-            </label>
-            <label class="space-y-1">
-                <span class="xp-label">Value</span>
-                <input v-model="newValue" class="xp-field font-mono text-[13px]" placeholder="https://…|https://…">
-            </label>
-            <div class="flex items-end">
-                <button class="xp-btn-primary w-full sm:w-auto" :disabled="busy || !newValue.trim()" @click="addEntry">
-                    Thêm
-                </button>
+        <div class="xp-card mb-4 p-4">
+            <div class="grid gap-3 sm:grid-cols-[220px_1fr_auto]">
+                <label class="space-y-1">
+                    <span class="xp-label">Key</span>
+                    <input v-model="newKey" class="xp-field font-mono text-[13px]" placeholder="095Lrdja">
+                </label>
+                <label class="space-y-1">
+                    <span class="xp-label">Value</span>
+                    <input v-model="newValue" class="xp-field font-mono text-[13px]" placeholder="https://imgur.com/a/…">
+                </label>
+                <div class="flex items-end">
+                    <button class="xp-btn-primary w-full sm:w-auto" :disabled="busy || !newValue.trim()" @click="addEntry">
+                        Thêm
+                    </button>
+                </div>
             </div>
+
+            <!--
+                The prefix and the destination are filled in on save. Shown here
+                because a field that quietly rewrites what was typed is worse
+                than one that does not help at all.
+            -->
+            <p class="mt-2 truncate font-mono text-[11px] text-neutral-500">
+                Sẽ lưu: <span class="text-neutral-800">{{ keyPreview }}</span>
+                <span v-if="valuePreview"> = <span class="text-neutral-800">{{ valuePreview }}</span></span>
+            </p>
         </div>
 
         <!-- Search -->

@@ -184,15 +184,56 @@ class LinkController extends Controller
 
         // validate() returns only the keys that were sent, so a field left out
         // of the request is absent here rather than null.
-        $key = ($data['key'] ?? null) ?: ($data['prefix'] ?? 'r:').$this->code();
+        $prefix = $data['prefix'] ?? 'r:';
+        $key = $this->normaliseKey($data['key'] ?? null, $prefix);
+        $value = $this->normaliseValue($data['value']);
 
         try {
-            $this->kv->put($key, $data['value']);
+            $this->kv->put($key, $value);
         } catch (XApiException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
 
-        return response()->json(['data' => ['key' => $key, 'value' => $data['value']]], 201);
+        return response()->json(['data' => ['key' => $key, 'value' => $value]], 201);
+    }
+
+    /**
+     * The key as KV stores it.
+     *
+     * Entries are prefixed so one namespace can hold more than one kind, but
+     * nobody types the prefix -- and a key saved without it is invisible to
+     * every prefix filter, which is how a namespace ends up with entries
+     * nobody can find again.
+     */
+    private function normaliseKey(?string $typed, string $prefix): string
+    {
+        $typed = trim((string) $typed);
+
+        if ($typed === '') {
+            return $prefix.$this->code();
+        }
+
+        return str_contains($typed, ':') ? $typed : $prefix.$typed;
+    }
+
+    /**
+     * The value as the Worker expects it: `<media>|<destination>`.
+     *
+     * One URL on its own gets the default domain appended, because that is
+     * what every existing entry pairs with and typing it a hundred times is
+     * how a typo gets in.
+     */
+    private function normaliseValue(string $value): string
+    {
+        $value = trim($value);
+
+        if (str_contains($value, '|')) {
+            return $value;
+        }
+
+        $host = LinkDomain::query()->where('is_active', true)->orderByDesc('is_default')->value('host');
+
+        return $host === null ? $value : $value.'|https://'.$host.'/';
     }
 
     /**
@@ -213,10 +254,12 @@ class LinkController extends Controller
             'pairs.*.value' => ['required', 'string', 'max:25000'],
         ]);
 
+        // The same shaping as a single entry: a bulk paste is exactly where a
+        // hundred keys would otherwise land without their prefix.
         $pairs = [];
 
         foreach ($data['pairs'] as $pair) {
-            $pairs[$pair['key']] = $pair['value'];
+            $pairs[$this->normaliseKey($pair['key'], 'r:')] = $this->normaliseValue($pair['value']);
         }
 
         try {

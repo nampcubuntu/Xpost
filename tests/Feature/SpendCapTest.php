@@ -207,6 +207,58 @@ class SpendCapTest extends TestCase
     }
 
     #[Test]
+    public function the_posts_endpoint_reports_spend_against_the_budget(): void
+    {
+        // Shown where the money is spent, not on a settings page nobody opens
+        // until after the invoice.
+        [, $user] = $this->tenant();
+        $user->currentTeam->forceFill(['daily_budget_usd' => 5.00])->save();
+
+        app(SpendGuard::class)->reserve($user->current_team_id, 120);
+
+        $this->actingAs($user)
+            ->getJson('/api/v1/posts')
+            ->assertOk()
+            ->assertJsonPath('budget.spent_usd', 1.2)
+            // Compared as a number: json_encode writes 5.0 as `5`, and
+            // assertJsonPath is strict about the difference.
+            ->assertJsonPath('budget.budget_usd', fn ($value) => (float) $value === 5.0)
+            ->assertJsonPath('budget.remaining_usd', 3.8);
+    }
+
+    #[Test]
+    public function no_ceiling_is_reported_as_absent_rather_than_as_a_number(): void
+    {
+        // budgetCentsFor answers -1 so the Lua script has something to compare;
+        // that must not reach the UI as a budget of minus one cent.
+        [, $user] = $this->tenant();
+
+        $this->actingAs($user)
+            ->getJson('/api/v1/posts')
+            ->assertOk()
+            ->assertJsonPath('budget.budget_usd', null)
+            ->assertJsonPath('budget.remaining_usd', null);
+    }
+
+    #[Test]
+    public function the_budget_can_be_set_and_cleared(): void
+    {
+        // Clearing has to stay reachable, or the first number typed can never
+        // be undone.
+        [, $user] = $this->tenant();
+
+        $this->actingAs($user)
+            ->putJson('/api/v1/publishing/budget', ['daily_budget_usd' => 25])
+            ->assertOk()
+            ->assertJsonPath('data.budget_usd', fn ($value) => (float) $value === 25.0);
+
+        $this->actingAs($user)
+            ->putJson('/api/v1/publishing/budget', ['daily_budget_usd' => null])
+            ->assertOk()
+            ->assertJsonPath('data.budget_usd', null);
+    }
+
+    #[Test]
     public function one_team_budget_does_not_touch_another(): void
     {
         $guard = app(SpendGuard::class);

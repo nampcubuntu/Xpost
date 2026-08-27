@@ -6,6 +6,7 @@ namespace App\Models;
 
 use App\Enums\AccountStatus;
 use App\Enums\CredentialType;
+use App\Enums\TargetStatus;
 use App\Models\Concerns\BelongsToTeam;
 use Database\Factories\XAccountFactory;
 use Illuminate\Database\Eloquent\Builder;
@@ -125,6 +126,31 @@ class XAccount extends Model
             ->whereNotNull('token_expires_at')
             ->where('token_expires_at', '<=', now()->addSeconds($withinSeconds))
             ->whereIn('status', [AccountStatus::Active->value, AccountStatus::RateLimited->value]);
+    }
+
+    /**
+     * Narrow a refresh run to accounts with work coming up.
+     *
+     * An OAuth 2.0 token lasts two hours, so refreshing every account that
+     * holds one means refreshing the whole pool twelve times a day whether or
+     * not it publishes -- ten million accounts would need fourteen hundred
+     * refreshes a second, sustained, to keep tokens nobody is going to use.
+     *
+     * An account that posts four times a day needs four working tokens, not
+     * twelve. XOAuth2Service::freshAccessToken() already refreshes on use, so
+     * this pre-warm exists only to keep that refresh off the publish path --
+     * which makes it worth doing for accounts about to publish, and pure waste
+     * for the rest.
+     */
+    public function scopeWithWorkDueWithin(Builder $query, int $minutes): Builder
+    {
+        return $query->whereExists(function ($sub) use ($minutes): void {
+            $sub->selectRaw('1')
+                ->from('post_targets')
+                ->whereColumn('post_targets.x_account_id', 'x_accounts.id')
+                ->whereIn('post_targets.status', TargetStatus::claimable())
+                ->where('post_targets.scheduled_at', '<=', now()->addMinutes($minutes));
+        });
     }
 
     public function scopeSearch(Builder $query, ?string $term): Builder

@@ -55,6 +55,52 @@ const menuFor = ref(null);
 const busy = ref(null);
 const flash = ref(null);
 
+/*
+ * What this team has spent at X today, against its ceiling.
+ *
+ * Shown here rather than on a settings page, because this is where the money is
+ * spent and a settings page is somewhere nobody opens until after the invoice.
+ * A null budget means no ceiling, which is the default.
+ */
+const budget = ref({ spent_usd: 0, budget_usd: null, remaining_usd: null });
+const editingBudget = ref(false);
+const budgetInput = ref('');
+
+const budgetPercent = computed(() => (budget.value.budget_usd
+    ? Math.min(100, Math.round((budget.value.spent_usd / budget.value.budget_usd) * 100))
+    : 0));
+
+function startEditBudget() {
+    budgetInput.value = budget.value.budget_usd ?? '';
+    editingBudget.value = true;
+}
+
+async function saveBudget() {
+    busy.value = 'budget';
+
+    try {
+        const value = String(budgetInput.value).trim();
+        const { data } = await api.put('publishing/budget', {
+            // Empty clears it: no ceiling has to stay reachable, or the first
+            // number typed can never be undone.
+            daily_budget_usd: value === '' ? null : Number(value),
+        });
+
+        budget.value = data.data;
+        editingBudget.value = false;
+        flash.value = {
+            type: 'ok',
+            message: data.data.budget_usd === null
+                ? 'Đã bỏ trần chi tiêu.'
+                : `Trần chi tiêu: $${data.data.budget_usd}/ngày.`,
+        };
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không lưu được.' };
+    } finally {
+        busy.value = null;
+    }
+}
+
 /**
  * X refuses every account at once when the balance is spent, so publishing
  * stops as a whole rather than ten thousand posts failing one at a time.
@@ -154,6 +200,7 @@ async function load() {
         // Absent means the scheduler has not run in the last few minutes.
         schedulerLastRunAt.value = data.scheduler_last_run_at ?? null;
         halt.value = data.halt ?? null;
+        budget.value = data.budget ?? budget.value;
     } finally {
         loading.value = false;
     }
@@ -264,10 +311,52 @@ const destinationHost = (url) => {
                 </p>
             </div>
 
-            <RouterLink :to="{ name: 'composer' }" class="xp-btn-primary">
-                <NavIcon name="composer" :size="14" />
-                Soạn bài mới
-            </RouterLink>
+            <div class="flex items-center gap-3">
+                <!--
+                    Today's spend, next to the button that creates more of it.
+                    A ceiling nobody chose would be worse than none, so the
+                    default reads as an amount rather than a limit.
+                -->
+                <div class="text-right text-[13px]">
+                    <p class="text-neutral-500">
+                        Hôm nay
+                        <span class="font-medium text-neutral-900">${{ budget.spent_usd.toFixed(2) }}</span>
+                        <template v-if="budget.budget_usd !== null">
+                            / ${{ budget.budget_usd.toFixed(2) }}
+                        </template>
+                    </p>
+
+                    <div v-if="budget.budget_usd !== null" class="mt-1 h-1 w-32 overflow-hidden rounded-full bg-neutral-200">
+                        <div
+                            class="h-full rounded-full"
+                            :class="budgetPercent >= 100 ? 'bg-red-600' : budgetPercent >= 80 ? 'bg-amber-500' : 'bg-neutral-900'"
+                            :style="{ width: `${budgetPercent}%` }"
+                        ></div>
+                    </div>
+
+                    <form v-if="editingBudget" class="mt-1 flex items-center gap-1" @submit.prevent="saveBudget">
+                        <span class="text-neutral-500">$</span>
+                        <input
+                            v-model="budgetInput"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            class="xp-field w-24 py-1 text-right text-[12px]"
+                            placeholder="không giới hạn"
+                        >
+                        <button class="text-[12px] text-blue-600 hover:underline" :disabled="busy === 'budget'">Lưu</button>
+                        <button type="button" class="text-[12px] text-neutral-500 hover:underline" @click="editingBudget = false">Huỷ</button>
+                    </form>
+                    <button v-else class="mt-0.5 text-[11px] text-blue-600 hover:underline" @click="startEditBudget">
+                        {{ budget.budget_usd === null ? 'Đặt trần chi tiêu' : 'Sửa trần' }}
+                    </button>
+                </div>
+
+                <RouterLink :to="{ name: 'composer' }" class="xp-btn-primary">
+                    <NavIcon name="composer" :size="14" />
+                    Soạn bài mới
+                </RouterLink>
+            </div>
         </div>
 
         <!--
@@ -304,6 +393,20 @@ const destinationHost = (url) => {
             >
                 Tôi đã nạp — tiếp tục đăng
             </button>
+        </div>
+
+        <!--
+            The ceiling doing its job. Distinct from the out-of-credit halt
+            above: that one is X refusing everyone, this one is a limit this
+            team chose, and it clears by itself at midnight.
+        -->
+        <div
+            v-if="budget.budget_usd !== null && budget.remaining_usd === 0"
+            class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"
+        >
+            <strong class="font-semibold">Đã hết trần chi tiêu hôm nay (${{ budget.budget_usd.toFixed(2) }}).</strong>
+            Bài còn lại được hoãn, không bài nào bị đánh hỏng — nửa đêm sẽ tự chạy tiếp.
+            Cần đăng ngay thì nâng trần ở góc trên.
         </div>
 
         <div

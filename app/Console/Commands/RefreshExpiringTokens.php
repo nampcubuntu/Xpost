@@ -19,7 +19,8 @@ class RefreshExpiringTokens extends Command
 {
     protected $signature = 'xpost:refresh-tokens
                             {--within=1800 : Refresh tokens expiring within this many seconds}
-                            {--limit=2000 : Maximum accounts per run}';
+                            {--limit=2000 : Maximum accounts per run}
+                            {--work-within=60 : Only accounts with work due within this many minutes; 0 for all}';
 
     protected $description = 'Refresh OAuth 2.0 access tokens that are about to expire';
 
@@ -27,10 +28,24 @@ class RefreshExpiringTokens extends Command
     {
         $within = (int) $this->option('within');
         $limit = (int) $this->option('limit');
+        $workWithin = (int) $this->option('work-within');
         $queued = 0;
 
         XAccount::withoutGlobalScopes()
             ->needingTokenRefresh($within)
+            /*
+             * Only accounts about to publish.
+             *
+             * A token lasts two hours, so warming every account that holds one
+             * means refreshing the whole pool twelve times a day whether or not
+             * it posts. freshAccessToken() already refreshes on use, so this
+             * run exists purely to keep that off the publish path -- worth
+             * doing for accounts with work coming, pure waste for the rest.
+             *
+             * --work-within=0 restores the old sweep, for a pool small enough
+             * that warming all of it costs nothing.
+             */
+            ->when($workWithin > 0, fn ($q) => $q->withWorkDueWithin($workWithin))
             ->orderBy('token_expires_at')
             ->limit($limit)
             ->chunkById(200, function ($accounts) use (&$queued): void {

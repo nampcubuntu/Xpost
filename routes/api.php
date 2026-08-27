@@ -58,6 +58,7 @@ Route::prefix('v1')->group(function (): void {
             // Lifting a halt is a human saying the balance is back; Xpost
             // cannot read it, and X exposes no endpoint that would.
             Route::post('publishing/resume', [PostController::class, 'resume']);
+            Route::put('publishing/budget', [PostController::class, 'updateBudget']);
 
             // Publishing spends API budget, so it gets its own tighter throttle.
             Route::post('posts/{post}/publish', [PostController::class, 'publish'])

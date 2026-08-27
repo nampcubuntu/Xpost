@@ -14,9 +14,11 @@ use App\Http\Resources\PostResource;
 use App\Http\Resources\PostTargetResource;
 use App\Models\Post;
 use App\Models\PostTarget;
+use App\Models\Team;
 use App\Services\Publishing\ComposerService;
 use App\Services\Publishing\PostFanoutService;
 use App\Services\Publishing\PublishingHalt;
+use App\Services\Publishing\SpendGuard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -27,6 +29,7 @@ class PostController extends Controller
         private readonly ComposerService $composer,
         private readonly PostFanoutService $fanout,
         private readonly PublishingHalt $halt,
+        private readonly SpendGuard $spend,
     ) {}
 
     public function index(Request $request): AnonymousResourceCollection
@@ -60,7 +63,45 @@ class PostController extends Controller
             // Set when X refused a post for want of credit, which refuses every
             // account at once and so is a property of the team, not the post.
             'halt' => $this->halt->current((int) $request->user()->current_team_id),
+            // Shown where the spending happens, rather than on a settings page
+            // nobody opens until after the invoice.
+            'budget' => $this->budgetFor((int) $request->user()->current_team_id),
         ]);
+    }
+
+    /** @return array{spent_usd: float, budget_usd: float|null, remaining_usd: float|null} */
+    private function budgetFor(int $teamId): array
+    {
+        $spentCents = $this->spend->spentCentsToday($teamId);
+        $budgetCents = $this->spend->budgetCentsFor($teamId);
+
+        return [
+            'spent_usd' => round($spentCents / 100, 2),
+            // budgetCentsFor answers -1 for "no ceiling", which is a value the
+            // Lua script can compare; the UI wants the absence.
+            'budget_usd' => $budgetCents < 0 ? null : round($budgetCents / 100, 2),
+            'remaining_usd' => $budgetCents < 0 ? null : round(max(0, $budgetCents - $spentCents) / 100, 2),
+        ];
+    }
+
+    /**
+     * Set or clear the team's daily ceiling.
+     *
+     * Null clears it, and that is the default rather than an oversight: a limit
+     * nobody chose, silently stopping a campaign overnight, is worse than none.
+     */
+    public function updateBudget(Request $request): JsonResponse
+    {
+        $this->authorize('viewAny', Post::class);
+
+        $data = $request->validate([
+            'daily_budget_usd' => ['present', 'nullable', 'numeric', 'min:0', 'max:1000000'],
+        ]);
+
+        $team = Team::query()->findOrFail($request->user()->current_team_id);
+        $team->forceFill(['daily_budget_usd' => $data['daily_budget_usd']])->save();
+
+        return response()->json(['data' => $this->budgetFor((int) $team->id)]);
     }
 
     /**

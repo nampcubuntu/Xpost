@@ -155,15 +155,18 @@ async function rebalance() {
 }
 
 /**
- * Apps that can actually run an OAuth 2.0 flow, emptiest first.
+ * Apps an account can be connected through, emptiest first.
  *
  * This used to just take apps[0], and the list arrives sorted by name -- so the
  * button reliably picked whichever app happened to sort first rather than the
  * one the account should go to. Connecting through an app whose client_id is
  * wrong fails at X with an error that says nothing about which app was used.
+ *
+ * Either set of keys qualifies: the two flows need different ones, and an app
+ * carrying only consumer keys is perfectly usable -- for OAuth 1.0a.
  */
 const connectableApps = computed(() => apps.value
-    .filter((app) => app.has_oauth2)
+    .filter((app) => app.has_oauth1 || app.has_oauth2)
     .sort((a, b) => (a.assigned_count / a.max_accounts) - (b.assigned_count / b.max_accounts)));
 
 const connectVia = ref(null);
@@ -172,33 +175,30 @@ watch(connectableApps, (list) => {
     connectVia.value ??= list[0]?.id ?? null;
 }, { immediate: true });
 
+const selectedApp = computed(() => apps.value.find((app) => app.id === connectVia.value) ?? null);
+
 /**
- * Only an OAuth 1.0a account can mint its own card.
+ * Which flows the selected app has the keys for.
  *
- * The Ads API refuses an OAuth 2.0 bearer outright, and minting is what puts
- * the tappable "From <domain>" row under a video. So this is the flow to use
- * for an account that has its own ads account -- at the cost of one more
- * consent screen for whoever holds it.
+ * Shown as a disabled button with the reason rather than a hidden one: a
+ * button that vanishes leaves nothing to explain why, and the fix -- filling
+ * in keys on the X Apps page -- is not guessable from an empty toolbar.
  */
-const oauth1Apps = computed(() => apps.value.filter((app) => app.has_oauth1));
+const canOAuth1 = computed(() => selectedApp.value?.has_oauth1 === true);
+const canOAuth2 = computed(() => selectedApp.value?.has_oauth2 === true);
 
-async function connectAccount(flow = 'oauth2') {
-    const usable = flow === 'oauth1' ? oauth1Apps.value : connectableApps.value;
-
-    if (!connectVia.value || !usable.some((a) => a.id === connectVia.value)) {
+async function connectAccount(flow) {
+    if (!connectVia.value) {
         flash.value = {
             type: 'error',
             message: apps.value.length
-                ? (flow === 'oauth1'
-                    ? 'App đang chọn thiếu Consumer Key/Secret nên không chạy được OAuth 1.0a. Điền ở trang X Apps.'
-                    : 'Không có X App nào đủ khoá OAuth 2.0. Điền Client ID và Client Secret ở trang X Apps.')
+                ? 'X App đang chọn chưa có khoá nào. Điền ở trang X Apps.'
                 : 'Hãy tạo ít nhất một X App trước.',
         };
 
         return;
     }
 
-    const app = apps.value.find((a) => a.id === connectVia.value);
     const endpoint = flow === 'oauth1' ? 'authorize-url-oauth1' : 'authorize-url';
 
     try {
@@ -207,7 +207,7 @@ async function connectAccount(flow = 'oauth2') {
     } catch (error) {
         flash.value = {
             type: 'error',
-            message: `Không mở được xác thực qua "${app?.name}": `
+            message: `Không mở được xác thực qua "${selectedApp.value?.name}": `
                 + (error.response?.data?.message ?? 'lỗi không rõ'),
         };
     }
@@ -232,20 +232,36 @@ async function connectAccount(flow = 'oauth2') {
                     </option>
                 </select>
 
-                <button class="xp-btn-primary" @click="connectAccount('oauth2')">+ Kết nối tài khoản</button>
-
                 <!--
-                    Separate button, not a checkbox: OAuth 1.0a is what an
-                    account needs to mint its own card, and picking the wrong
-                    flow is only discovered much later when a publish fails.
+                    OAuth 1.0a leads because it is the flow this pool is built
+                    on: only an account connected this way can mint its own
+                    card, and that is what puts the "From <domain>" row under a
+                    video. It is also the button that gets pressed thousands of
+                    times, against a handful for the other.
+
+                    Two buttons rather than a checkbox: picking the wrong flow
+                    is only discovered much later, when a publish fails.
                 -->
                 <button
-                    v-if="oauth1Apps.length"
-                    class="xp-btn-ghost"
-                    title="Bắt buộc nếu tài khoản này có Ads account và cần tự tạo card"
+                    class="xp-btn-primary"
+                    :disabled="!canOAuth1"
+                    :title="canOAuth1
+                        ? 'OAuth 1.0a — đăng bài và tự tạo card. Token không hết hạn.'
+                        : `X App &quot;${selectedApp?.name ?? ''}&quot; thiếu Consumer Key/Secret. Điền ở trang X Apps.`"
                     @click="connectAccount('oauth1')"
                 >
-                    + Kết nối (OAuth 1.0a)
+                    + Kết nối tài khoản
+                </button>
+
+                <button
+                    class="xp-btn-ghost"
+                    :disabled="!canOAuth2"
+                    :title="canOAuth2
+                        ? 'OAuth 2.0 — đăng được nhưng không tự tạo card. Dùng cho tài khoản không có Ads account.'
+                        : `X App &quot;${selectedApp?.name ?? ''}&quot; thiếu Client ID/Secret. Điền ở trang X Apps.`"
+                    @click="connectAccount('oauth2')"
+                >
+                    + Kết nối (không Ads)
                 </button>
             </div>
         </div>

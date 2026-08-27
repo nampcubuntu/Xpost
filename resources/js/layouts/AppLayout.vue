@@ -55,6 +55,14 @@ const nav = [
             { name: 'links', label: 'Short link', icon: 'globe', ability: 'manage_infrastructure' },
         ],
     },
+    {
+        heading: 'Team',
+        items: [
+            // No ability: seeing who else is on the team explains whose
+            // campaigns these are, and the page hides what a member cannot do.
+            { name: 'members', label: 'Thành viên', icon: 'accounts' },
+        ],
+    },
 ];
 
 /** The nav as this role sees it, with empty groups dropped entirely. */

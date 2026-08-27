@@ -6,12 +6,14 @@ namespace App\Providers;
 
 use App\Models\Post;
 use App\Models\PostTarget;
+use App\Models\User;
 use App\Models\XAccount;
 use App\Models\XApp;
 use App\Observers\PostTargetObserver;
 use App\Observers\XAccountObserver;
 use App\Policies\LinkPolicy;
 use App\Policies\PostPolicy;
+use App\Policies\UserPolicy;
 use App\Policies\XAccountPolicy;
 use App\Policies\XAppPolicy;
 use App\Services\Analytics\ClickHouseConnection;
@@ -88,6 +90,7 @@ class XpostServiceProvider extends ServiceProvider
     {
         Gate::policy(Post::class, PostPolicy::class);
         Gate::policy(XAccount::class, XAccountPolicy::class);
+        Gate::policy(User::class, UserPolicy::class);
         Gate::policy(XApp::class, XAppPolicy::class);
 
         /*

@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ComposerController;
 use App\Http\Controllers\Api\LinkController;
 use App\Http\Controllers\Api\MediaController;
+use App\Http\Controllers\Api\MemberController;
 use App\Http\Controllers\Api\PostController;
 use App\Http\Controllers\Api\PostScheduleController;
 use App\Http\Controllers\Api\ProxyController;
@@ -86,6 +87,15 @@ Route::prefix('v1')->group(function (): void {
 
             Route::apiResource('account-groups', AccountGroupController::class)->except(['show']);
             Route::post('account-groups/{account_group}/sync', [AccountGroupController::class, 'sync']);
+
+            /*
+             * Team membership. Bound to `member` rather than `user` so route
+             * model binding cannot be confused with the authenticated caller.
+             */
+            Route::get('members', [MemberController::class, 'index']);
+            Route::post('members', [MemberController::class, 'store']);
+            Route::put('members/{member}', [MemberController::class, 'update']);
+            Route::delete('members/{member}', [MemberController::class, 'destroy']);
 
             // ----- Infrastructure -----
             Route::apiResource('apps', XAppController::class)->parameters(['apps' => 'xApp']);

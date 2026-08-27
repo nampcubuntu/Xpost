@@ -18,6 +18,7 @@ const routes = [
     { path: '/apps', name: 'apps', component: () => import('./pages/Apps.vue') },
     { path: '/proxies', name: 'proxies', component: () => import('./pages/Proxies.vue') },
     { path: '/links', name: 'links', component: () => import('./pages/Links.vue') },
+    { path: '/members', name: 'members', component: () => import('./pages/Members.vue') },
     { path: '/analytics', name: 'analytics', component: () => import('./pages/Analytics.vue') },
 ];
 

@@ -37,6 +37,9 @@ const post = computed(() => composer.post);
  */
 const estimatedAccounts = computed(() => composer.estimate?.accounts ?? 0);
 
+/** How many accounts have already had this exact video and destination. */
+const duplicate = computed(() => composer.estimate?.duplicate ?? { accounts: 0, posts: 0, days: 30 });
+
 const counterClass = computed(() => {
     if (composer.measure.remaining < 0) return 'text-red-600 font-semibold';
     if (composer.measure.remaining <= 20) return 'text-amber-600';
@@ -83,6 +86,15 @@ watch(
             await composer.refreshSamples();
         }, 250);
     },
+);
+
+/*
+ * The duplicate check reads the destination and the attached media, so it has
+ * to be re-run when either changes -- not only when the audience does.
+ */
+watch(
+    () => [post.value.website_url, post.value.destination_type, composer.media.map((m) => m.id).join(',')],
+    () => scheduleEstimate(),
 );
 
 let estimateTimer;
@@ -354,6 +366,26 @@ function uploadedOn(item) {
                         {{ estimatedAccounts.toLocaleString('vi-VN') }} tài khoản sẽ đăng nội dung
                         <strong>giống hệt nhau</strong>. Dùng <code class="font-mono">{'{'}xin chào|chào bạn{'}'}</code>
                         để mỗi tài khoản một biến thể.
+                    </p>
+
+                    <!--
+                        The same picture X can see, on the side of the decision
+                        where it is still a decision. Nothing is blocked and
+                        nothing is hidden -- the number is simply put in front
+                        of the person choosing.
+                    -->
+                    <p
+                        v-if="duplicate.accounts > 0"
+                        class="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-amber-900"
+                    >
+                        Video và link này đã đăng từ
+                        <strong>{{ duplicate.accounts.toLocaleString('vi-VN') }} tài khoản</strong>
+                        trong {{ duplicate.days }} ngày qua<template v-if="duplicate.posts > 1">
+                            , qua {{ duplicate.posts }} chiến dịch</template>.
+                        <span class="mt-0.5 block text-amber-800">
+                            Quy tắc của X: nội dung trùng hoặc gần trùng trên nhiều tài khoản bạn kiểm soát
+                            là không được phép, dù có lệch giờ đăng.
+                        </span>
                     </p>
                 </div>
 

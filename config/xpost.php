@@ -43,6 +43,15 @@ return [
         'target_retention_days' => (int) env('XPOST_TARGET_RETENTION_DAYS', 30),
 
         /*
+         * How far back the composer looks for the same content going out again.
+         *
+         * X's rules name duplicative content across accounts you control as
+         * never allowed, staggered or not, so the window is about what a
+         * reviewer would consider recent rather than any published number.
+         */
+        'duplicate_window_days' => (int) env('XPOST_DUPLICATE_WINDOW_DAYS', 30),
+
+        /*
          * How a post with media and a website destination is rendered.
          *
          *   card_only  Always a video_website card -- video playing inline with

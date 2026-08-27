@@ -12,6 +12,7 @@ use App\Enums\VariantStrategy;
 use App\Http\Controllers\Controller;
 use App\Models\Post;
 use App\Services\Publishing\AudienceResolver;
+use App\Services\Publishing\DuplicateContentCheck;
 use App\Services\Publishing\SchedulePlanner;
 use App\Services\Publishing\SpintaxRenderer;
 use App\Services\Publishing\TweetTextWeigher;
@@ -25,6 +26,8 @@ use Illuminate\Http\Request;
  */
 class ComposerController extends Controller
 {
+    public function __construct(private readonly DuplicateContentCheck $duplicates) {}
+
     /** Enum values + limits, so the SPA never hard-codes them. */
     public function options(): JsonResponse
     {
@@ -99,6 +102,12 @@ class ComposerController extends Controller
             'window_ends_at' => ['nullable', 'date'],
             'jitter_seconds' => ['nullable', 'integer', 'min:0'],
             'per_minute_cap' => ['nullable', 'integer', 'min:1'],
+            // For the duplicate check, which asks what this content has already
+            // been sent to rather than how many accounts it is heading for.
+            'media_ids' => ['nullable', 'array'],
+            'media_ids.*' => ['integer'],
+            'website_url' => ['nullable', 'string', 'max:2048'],
+            'post_id' => ['nullable', 'integer'],
         ]);
 
         // Same wall-clock reading as StorePostRequest, or the estimate quotes a
@@ -130,6 +139,16 @@ class ComposerController extends Controller
             'last_at' => $window['last']->toIso8601String(),
             'duration_seconds' => $window['duration_seconds'],
             'exceeds_limit' => $count > config('xpost.publishing.max_targets_per_post'),
+            /*
+             * How much of this exact content has already gone out. Shown here
+             * rather than after publishing, because that is the only side of
+             * the decision where it is still a decision.
+             */
+            'duplicate' => $this->duplicates->for(
+                array_map('intval', $data['media_ids'] ?? []),
+                $data['website_url'] ?? null,
+                isset($data['post_id']) ? (int) $data['post_id'] : null,
+            ),
         ]);
     }
 }

@@ -139,6 +139,11 @@ export const useComposerStore = defineStore('composer', {
                 window_ends_at: this.post.window_ends_at,
                 jitter_seconds: this.post.jitter_seconds,
                 per_minute_cap: this.post.per_minute_cap,
+                // For the duplicate check: what this content has already gone
+                // out to, rather than how many accounts it is heading for.
+                media_ids: this.media.map((item) => item.id),
+                website_url: this.post.destination_type === 'website' ? this.post.website_url : null,
+                post_id: this.post.id ?? null,
             });
 
             this.estimate = data;

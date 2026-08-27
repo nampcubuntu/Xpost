@@ -12,6 +12,7 @@ use App\Models\PostTarget;
 use App\Services\Publishing\PublishingHalt;
 use App\Support\TeamContext;
 use Illuminate\Console\Command;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -154,15 +155,37 @@ class DispatchDueTargets extends Command
      */
     private function claim(int $limit, string $worker, ?int $teamId): array
     {
-        return DB::transaction(function () use ($limit, $worker, $teamId): array {
+        /*
+         * Fair share first, then fill whatever is left over.
+         *
+         * Ordering the whole queue by scheduled_at hands every slot to
+         * whichever team happens to have the oldest work, so one team fanning
+         * out ten thousand targets stops every other team until it drains.
+         * With one tenant that is invisible; with a thousand paying ones it is
+         * an outage for nine hundred and ninety-nine of them.
+         *
+         * The top-up pass matters as much as the share: without it a team with
+         * a single due target still reserves a full slice, and the run leaves
+         * most of its capacity unused while a backlog waits.
+         */
+        $ids = $this->fairShareIds($limit, $teamId);
+
+        if (count($ids) < $limit) {
+            $ids = array_merge($ids, $this->fillIds($limit - count($ids), $teamId, $ids));
+        }
+
+        if ($ids === []) {
+            return [];
+        }
+
+        return DB::transaction(function () use ($ids, $worker): array {
             $rows = DB::table('post_targets')
                 ->select('id', 'team_id', 'post_id')
+                ->whereIn('id', $ids)
+                // Re-checked under the lock: another dispatcher may have taken
+                // these between the two queries.
                 ->whereIn('status', TargetStatus::claimable())
-                ->where('scheduled_at', '<=', now())
-                ->where(fn ($q) => $q->whereNull('available_at')->orWhere('available_at', '<=', now()))
-                ->when($teamId, fn ($q, $id) => $q->where('team_id', $id))
                 ->orderBy('scheduled_at')
-                ->limit($limit)
                 ->lockForUpdate(true)   // SKIP LOCKED
                 ->get()
                 ->all();
@@ -182,6 +205,71 @@ class DispatchDueTargets extends Command
 
             return $rows;
         }, 3);
+    }
+
+    /**
+     * An equal slice of this run for every team that has work due.
+     *
+     * A window function rather than a query per team: at a thousand tenants
+     * that would be a thousand round trips a minute, and the ranking is the
+     * database's job.
+     *
+     * @param  list<int>  $exclude
+     * @return list<int>
+     */
+    private function fairShareIds(int $limit, ?int $teamId, array $exclude = []): array
+    {
+        $teams = max(1, $this->teamsWithWork($teamId));
+        $perTeam = max(1, (int) ceil($limit / $teams));
+
+        $ranked = $this->dueTargets($teamId, $exclude)
+            ->select('id', 'team_id', 'scheduled_at')
+            ->selectRaw('ROW_NUMBER() OVER (PARTITION BY team_id ORDER BY scheduled_at, id) AS team_rank');
+
+        return DB::query()
+            ->fromSub($ranked, 'ranked')
+            ->where('team_rank', '<=', $perTeam)
+            ->orderBy('scheduled_at')
+            ->limit($limit)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    /**
+     * Whatever is left after the fair share, oldest first.
+     *
+     * @param  list<int>  $exclude
+     * @return list<int>
+     */
+    private function fillIds(int $limit, ?int $teamId, array $exclude): array
+    {
+        return $this->dueTargets($teamId, $exclude)
+            ->orderBy('scheduled_at')
+            ->limit($limit)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    private function teamsWithWork(?int $teamId): int
+    {
+        return $teamId !== null ? 1 : (int) $this->dueTargets(null)->distinct()->count('team_id');
+    }
+
+    /**
+     * Everything the dispatcher could take right now.
+     *
+     * @param  list<int>  $exclude
+     */
+    private function dueTargets(?int $teamId, array $exclude = []): Builder
+    {
+        return DB::table('post_targets')
+            ->whereIn('status', TargetStatus::claimable())
+            ->where('scheduled_at', '<=', now())
+            ->where(fn ($q) => $q->whereNull('available_at')->orWhere('available_at', '<=', now()))
+            ->when($teamId, fn ($q, $id) => $q->where('team_id', $id))
+            ->when($exclude !== [], fn ($q) => $q->whereNotIn('id', $exclude));
     }
 
     /**

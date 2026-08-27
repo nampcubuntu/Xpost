@@ -32,6 +32,17 @@ return [
         'default_account_daily_cap' => (int) env('XPOST_ACCOUNT_DAILY_CAP', 50),
 
         /*
+         * How long a finished target stays in MySQL.
+         *
+         * post_targets is a work queue, not a ledger: every publish is already
+         * in ClickHouse, partitioned by month and expiring on its own. Left to
+         * accumulate this is the one table that grows with the whole pool --
+         * a thousand teams of ten thousand accounts posting four times a day
+         * is forty million rows a day.
+         */
+        'target_retention_days' => (int) env('XPOST_TARGET_RETENTION_DAYS', 30),
+
+        /*
          * How a post with media and a website destination is rendered.
          *
          *   card_only  Always a video_website card -- video playing inline with

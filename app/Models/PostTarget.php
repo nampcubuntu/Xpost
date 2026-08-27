@@ -10,16 +10,50 @@ use Database\Factories\PostTargetFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Prunable;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * One (post, account) pair. This is the unit of work the dispatcher hands to
  * the queue, and the row that records what X actually returned.
+ *
+ * A work item, not a ledger. Every publish is already written to ClickHouse by
+ * MetricsRecorder -- partitioned by month, ordered by team, expiring on its own
+ * after eighteen months -- so once a target is finished the row here has done
+ * its job. Left to accumulate it is the one table that grows with the whole
+ * pool: a thousand teams of ten thousand accounts posting four times a day is
+ * forty million rows a day, which no amount of partitioning makes queryable.
  */
 class PostTarget extends Model
 {
     /** @use HasFactory<PostTargetFactory> */
-    use BelongsToTeam, HasFactory;
+    use BelongsToTeam, HasFactory, Prunable;
+
+    /**
+     * Deleting a day's work forty million rows at a time is the point; the
+     * default of a thousand per query would still be running tomorrow.
+     */
+    protected int $prunableChunkSize = 5_000;
+
+    /**
+     * Finished work, past the window anyone looks at it.
+     *
+     * Only terminal states. A pending or queued row is work not yet done, and
+     * an old scheduled_at is exactly what a backlog looks like -- pruning those
+     * would silently cancel a campaign.
+     *
+     * The window is measured from when the row was last touched rather than
+     * from published_at, because a failed target never has one.
+     */
+    public function prunable(): Builder
+    {
+        $days = max(1, (int) config('xpost.publishing.target_retention_days', 30));
+
+        return static::query()
+            ->withoutGlobalScopes()
+            ->whereIn('status', TargetStatus::terminal())
+            ->where('updated_at', '<', now()->subDays($days));
+    }
 
     protected $fillable = [
         'post_id', 'x_account_id', 'team_id', 'post_variant_id',

@@ -25,6 +25,22 @@ enum TargetStatus: string
         return [self::Pending->value];
     }
 
+    /**
+     * Statuses that will never change again, as values for a whereIn.
+     *
+     * What makes a row safe to delete: anything else is work not yet done, and
+     * an old row in one of those states is a backlog, not litter.
+     *
+     * @return list<string>
+     */
+    public static function terminal(): array
+    {
+        return array_values(array_map(
+            static fn (self $status) => $status->value,
+            array_filter(self::cases(), static fn (self $status) => $status->isTerminal()),
+        ));
+    }
+
     public function label(): string
     {
         return __('xpost.target_status.'.$this->value);

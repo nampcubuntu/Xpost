@@ -38,6 +38,19 @@ class XAppResource extends JsonResource
             'monthly_posts_used' => $this->monthly_posts_used,
             'budget_remaining' => max(0, $this->monthly_post_cap - $this->monthly_posts_used),
             'max_accounts' => $this->max_accounts,
+
+            /*
+             * How many accounts this app's own posting cap supports.
+             *
+             * X allows one app 10,000 posts per 24 hours, so the account count
+             * behind it is that divided by what each account posts. max_accounts
+             * is a number a person chose; this is the number X's limit implies,
+             * and showing both is what makes the first one arguable.
+             */
+            'accounts_supported' => (int) floor(
+                ($this->daily_post_cap ?: 10_000)
+                / max(1, (int) config('xpost.publishing.expected_posts_per_account_per_day', 4)),
+            ),
             'assigned_count' => $this->assigned_count,
             'capacity_percent' => $this->max_accounts > 0
                 ? round($this->assigned_count / $this->max_accounts * 100, 1)

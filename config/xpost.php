@@ -52,6 +52,16 @@ return [
         'duplicate_window_days' => (int) env('XPOST_DUPLICATE_WINDOW_DAYS', 30),
 
         /*
+         * What one account is expected to post in a day.
+         *
+         * Only used to answer "how many accounts does this app support" --
+         * X caps an app at 10,000 posts per 24 hours, so the number of accounts
+         * behind it is that cap divided by this. Without it, max_accounts is a
+         * number somebody typed once and nobody can justify later.
+         */
+        'expected_posts_per_account_per_day' => (int) env('XPOST_POSTS_PER_ACCOUNT_PER_DAY', 4),
+
+        /*
          * How a post with media and a website destination is rendered.
          *
          *   card_only  Always a video_website card -- video playing inline with

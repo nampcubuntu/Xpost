@@ -3,6 +3,12 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import api, { validationErrors } from '../lib/api';
 
 const apps = ref([]);
+
+/*
+ * The divisor behind `accounts_supported`, for the tooltip that explains it.
+ * The server computes the number; this only says out loud how it got there.
+ */
+const postsPerAccount = 4;
 const loading = ref(true);
 const busy = ref(false);
 const errors = ref({});
@@ -272,6 +278,25 @@ async function connect(app) {
                                     <div class="h-full rounded-full bg-neutral-900" :style="{ width: `${Math.min(app.capacity_percent, 100)}%` }"></div>
                                 </div>
                                 <span class="text-xs text-neutral-500">{{ app.assigned_count }}/{{ app.max_accounts }}</span>
+                            </div>
+
+                            <!--
+                                What X's own cap allows, next to what someone
+                                chose. Seeing both is what makes the chosen
+                                number arguable rather than a magic constant.
+                            -->
+                            <div
+                                v-if="app.accounts_supported"
+                                class="mt-0.5 text-[11px]"
+                                :class="app.max_accounts > app.accounts_supported ? 'text-amber-600' : 'text-neutral-400'"
+                                :title="`${app.daily_post_cap} bài/ngày ÷ ${postsPerAccount} bài mỗi tài khoản`"
+                            >
+                                <template v-if="app.max_accounts > app.accounts_supported">
+                                    vượt trần X — hạn mức app chỉ đủ {{ app.accounts_supported.toLocaleString('vi-VN') }}
+                                </template>
+                                <template v-else>
+                                    trần X: {{ app.accounts_supported.toLocaleString('vi-VN') }} tài khoản
+                                </template>
                             </div>
                         </td>
                         <td class="px-4 py-3 text-neutral-600">

@@ -23,6 +23,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Horizon access
+    |--------------------------------------------------------------------------
+    | Comma-separated emails allowed into the queue dashboard outside local. It
+    | shows every team's jobs at once -- payloads, failures, account ids -- so
+    | it sits above the tenant hierarchy: being owner of one team is not a
+    | reason to see another team's queue.
+    |
+    | Left blank it falls back to the platform owner, so a correct install is
+    | never locked out of its own dashboard by an unset variable.
+    */
+
+    'horizon_emails' => env('XPOST_HORIZON_EMAILS'),
+
+    /*
+    |--------------------------------------------------------------------------
     | HTTP client
     |--------------------------------------------------------------------------
     | Applied to every outbound call to the X API. Timeouts are deliberately

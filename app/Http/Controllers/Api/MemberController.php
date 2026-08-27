@@ -34,8 +34,20 @@ class MemberController extends Controller
 
         $this->authorize('viewAny', User::class);
 
+        /*
+         * The operator is on every team and is not a teammate.
+         *
+         * They hold owner on all of them so a customer cannot delete an app or
+         * appoint owners -- but listing them here shows every customer the
+         * operator's name and email, and offers buttons that only ever refuse.
+         * They are part of the plumbing, not part of the team.
+         */
+        $members = $team->members()->orderBy('name')->get()
+            ->reject(fn (User $member) => $member->isPlatformOperator()
+                && ! $request->user()->isPlatformOperator());
+
         return response()->json([
-            'data' => $team->members()->orderBy('name')->get()->map(fn (User $member) => [
+            'data' => $members->values()->map(fn (User $member) => [
                 'id' => $member->id,
                 'name' => $member->name,
                 'email' => $member->email,
@@ -98,6 +110,7 @@ class MemberController extends Controller
         $role = TeamRole::from($data['role']);
 
         $this->assertOnTeam($team, $member);
+        $this->assertNotTheOperator($request, $member);
         $this->assertNotSelf($request, $member, 'Không tự đổi vai trò của chính mình.');
         $this->assertCanGrant($request, $role);
         $this->assertOwnerRemains($team, $member, $role);
@@ -113,6 +126,7 @@ class MemberController extends Controller
         $this->authorize('delete', $member);
 
         $this->assertOnTeam($team, $member);
+        $this->assertNotTheOperator($request, $member);
         $this->assertNotSelf($request, $member, 'Không tự xoá mình khỏi team.');
         $this->assertOwnerRemains($team, $member, null);
 
@@ -158,6 +172,21 @@ class MemberController extends Controller
     private function assertNotSelf(Request $request, User $member, string $message): void
     {
         abort_if($member->id === $request->user()->id, 422, $message);
+    }
+
+    /**
+     * A tenant cannot edit the operator out of its own team.
+     *
+     * They are hidden from the list, so reaching this needs a hand-made
+     * request -- which is exactly when it matters. 404 rather than 403: the
+     * answer to "is the operator on my team" is not a customer's to have.
+     */
+    private function assertNotTheOperator(Request $request, User $member): void
+    {
+        abort_if(
+            $member->isPlatformOperator() && ! $request->user()->isPlatformOperator(),
+            404,
+        );
     }
 
     private function assertOnTeam(Team $team, User $member): void

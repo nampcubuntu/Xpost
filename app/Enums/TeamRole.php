@@ -77,6 +77,13 @@ enum TeamRole: string
             // Spending is the owner's, whoever holds the card.
             'manage_budget' => $this->atLeast(self::Admin),
             'delete_app' => $this === self::Owner,
+            /*
+             * Not a team role at all -- the queue dashboard shows every team's
+             * jobs, so it belongs to whoever runs Xpost. Declared here so the
+             * shape is complete, and overwritten by User::abilities() from the
+             * Horizon gate.
+             */
+            'view_queue' => false,
         ];
     }
 

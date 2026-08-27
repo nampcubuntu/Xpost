@@ -193,6 +193,70 @@ class TeamMembersTest extends TestCase
     }
 
     #[Test]
+    public function the_operator_is_not_listed_to_a_customer(): void
+    {
+        /*
+         * They hold owner on every team so a tenant cannot delete an app or
+         * appoint owners -- but listing them shows every customer the
+         * operator's name and email, and offers buttons that only ever refuse.
+         * They are plumbing, not a teammate.
+         */
+        config(['xpost.platform_owner_email' => 'operator@xpost.test']);
+
+        $operator = User::factory()->create(['email' => 'operator@xpost.test']);
+        $this->team->members()->attach($operator->id, ['role' => TeamRole::Owner->value]);
+
+        $emails = collect(
+            $this->actingAs($this->memberWith(TeamRole::Admin))
+                ->getJson('/api/v1/members')
+                ->assertOk()
+                ->json('data')
+        )->pluck('email');
+
+        $this->assertFalse($emails->contains('operator@xpost.test'));
+    }
+
+    #[Test]
+    public function the_operator_sees_themselves(): void
+    {
+        // Hidden from customers, not from the person who runs it.
+        config(['xpost.platform_owner_email' => 'operator@xpost.test']);
+
+        $operator = User::factory()->create([
+            'email' => 'operator@xpost.test',
+            'current_team_id' => $this->team->id,
+        ]);
+        $this->team->members()->attach($operator->id, ['role' => TeamRole::Owner->value]);
+
+        $emails = collect(
+            $this->actingAs($operator->refresh())->getJson('/api/v1/members')->json('data')
+        )->pluck('email');
+
+        $this->assertTrue($emails->contains('operator@xpost.test'));
+    }
+
+    #[Test]
+    public function a_customer_cannot_edit_the_operator_by_id(): void
+    {
+        // Hidden from the list, so reaching this needs a hand-made request --
+        // which is exactly when it matters.
+        config(['xpost.platform_owner_email' => 'operator@xpost.test']);
+
+        $operator = User::factory()->create(['email' => 'operator@xpost.test']);
+        $this->team->members()->attach($operator->id, ['role' => TeamRole::Owner->value]);
+
+        $admin = $this->memberWith(TeamRole::Admin);
+
+        $this->actingAs($admin)
+            ->putJson("/api/v1/members/{$operator->id}", ['role' => 'member'])
+            ->assertNotFound();
+
+        $this->actingAs($admin)
+            ->deleteJson("/api/v1/members/{$operator->id}")
+            ->assertNotFound();
+    }
+
+    #[Test]
     public function a_member_of_another_team_is_not_reachable(): void
     {
         // Route model binding finds any user by id; the team check is what

@@ -194,7 +194,14 @@ async function logout() {
 
             <!-- Footer -->
             <div class="border-t border-neutral-200 py-2">
+                <!--
+                    Horizon shows every team's jobs at once, so it belongs to
+                    whoever runs Xpost rather than to whoever owns a team. The
+                    gate already refuses everyone else; this stops offering them
+                    a link that would only refuse them.
+                -->
                 <a
+                    v-if="auth.can('view_queue')"
                     href="/horizon"
                     target="_blank"
                     rel="noopener"

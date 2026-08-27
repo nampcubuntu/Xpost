@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Gate;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
@@ -92,9 +93,29 @@ class User extends Authenticatable
         $role = $this->current_team_id === null ? null : $this->teamRole($this->current_team_id);
 
         // No team is no abilities, not a crash and not a silent yes.
-        return $role?->abilities() ?? array_map(
+        $abilities = $role?->abilities() ?? array_map(
             fn () => false,
             TeamRole::Member->abilities(),
         );
+
+        /*
+         * Reading the queue is not a team role at all.
+         *
+         * Horizon shows every team's jobs at once -- payloads, failures,
+         * account ids -- so it belongs to whoever runs Xpost, not to whoever
+         * owns a team. Deciding it from the role would have made every
+         * customer's owner a platform operator.
+         */
+        $abilities['view_queue'] = Gate::forUser($this)->allows('viewHorizon');
+
+        return $abilities;
+    }
+
+    /** Whether this account runs Xpost rather than renting it. */
+    public function isPlatformOperator(): bool
+    {
+        $email = (string) config('xpost.platform_owner_email');
+
+        return $email !== '' && strtolower($this->email) === strtolower($email);
     }
 }

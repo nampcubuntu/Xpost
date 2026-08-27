@@ -145,7 +145,10 @@ class TinyUrlTest extends TestCase
             'api.cloudflare.com/*/values/*' => Http::response('https://a|https://b'),
         ]);
 
+        // Stated rather than inherited: the tenant context is cleared when a
+        // request ends, so nothing outside one has a team unless it says so.
         TinyLink::create([
+            'team_id' => $this->user->current_team_id,
             'target_url' => 'https://twvideo.top/r/abc',
             'target_hash' => TinyLink::hashFor('https://twvideo.top/r/abc'),
             'tiny_url' => 'https://tinyurl.com/known',

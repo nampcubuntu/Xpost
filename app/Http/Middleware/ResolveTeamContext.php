@@ -45,6 +45,22 @@ class ResolveTeamContext
 
         TeamContext::set((int) $teamId);
 
-        return $next($request);
+        try {
+            return $next($request);
+        } finally {
+            /*
+             * Cleared on the way out, not left for the process to die with.
+             *
+             * Under PHP-FPM the process ends and takes the context with it, so
+             * leaking was impossible. Under a long-lived worker -- Octane,
+             * FrankenPHP, an artisan process serving several tenants -- it is
+             * not: a context left behind is read by TeamScope on the next
+             * request, and one customer is served another's accounts. That
+             * failure never appears in a test suite and never appears under
+             * light load; it appears in production, intermittently, as the
+             * worst kind of bug this system can have.
+             */
+            TeamContext::set(null);
+        }
     }
 }

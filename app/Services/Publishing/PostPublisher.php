@@ -45,6 +45,7 @@ final class PostPublisher
         private readonly MetricsRecorder $metrics,
         private readonly XCardService $cards,
         private readonly PublishingHalt $halt,
+        private readonly SpendGuard $spend,
     ) {}
 
     public function publish(PostTarget $target): PublishOutcome
@@ -104,7 +105,26 @@ final class PostPublisher
             return $this->defer($target, $shortestWait, $reason);
         }
 
+        /*
+         * The team's own ceiling, reserved before anything is spent.
+         *
+         * Checked here rather than at fan-out because that is where the money
+         * is actually committed: a post fanned out this morning is only charged
+         * when it goes out, and a budget that counted intentions would stop
+         * campaigns that never cost anything.
+         */
+        $costCents = $this->spend->costCentsFor($target);
+
+        if (! $this->spend->reserve((int) $target->team_id, $costCents)) {
+            $this->limiter->releaseAccountSlot($account);
+            $this->limiter->releaseAppSlot($app);
+
+            // Deferred, not failed: tomorrow's budget publishes it unchanged.
+            return $this->defer($target, $this->secondsUntilMidnight(), 'team_budget_spent');
+        }
+
         $startedAt = hrtime(true);
+        $published = false;
 
         try {
             $cardUri = $this->resolveCard($target, $account);
@@ -144,6 +164,9 @@ final class PostPublisher
             );
 
             $result = $this->clients->for($account)->createTweet($payload);
+
+            // Past this line X has charged for the post, whatever happens next.
+            $published = true;
 
             $durationMs = (int) ((hrtime(true) - $startedAt) / 1_000_000);
 
@@ -201,7 +224,27 @@ final class PostPublisher
             }
 
             return $this->fail($target, 'internal_error', $e->getMessage());
+        } finally {
+            /*
+             * Refund unless the post actually went out.
+             *
+             * Seven paths leave this method without publishing -- a refused
+             * card, a rate limit, a spent balance, a reauth, a retry, a
+             * terminal failure, an unexpected throw -- and every one of them
+             * costs X nothing. Refunding at each site would work until someone
+             * adds an eighth, at which point the budget quietly drifts down
+             * until a team is stopped by money it never spent.
+             */
+            if (! $published) {
+                $this->spend->release((int) $target->team_id, $costCents);
+            }
         }
+    }
+
+    /** A budget is spent for the day, so retrying before then is pointless. */
+    private function secondsUntilMidnight(): int
+    {
+        return max(60, (int) now()->diffInSeconds(now()->endOfDay(), false) + 1);
     }
 
     /**

@@ -16,7 +16,12 @@ class Team extends Model
     /** @use HasFactory<TeamFactory> */
     use HasFactory;
 
-    protected $fillable = ['name', 'slug', 'owner_id', 'timezone', 'account_quota', 'settings'];
+    protected $fillable = [
+        'name', 'slug', 'owner_id', 'timezone', 'account_quota', 'settings',
+        // Null means no ceiling. A limit nobody chose, silently stopping a
+        // campaign overnight, would be worse than none at all.
+        'daily_budget_usd',
+    ];
 
     protected function casts(): array
     {

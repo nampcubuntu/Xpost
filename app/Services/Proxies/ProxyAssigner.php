@@ -33,8 +33,29 @@ class ProxyAssigner
 
     private ?int $poolTeamId = null;
 
+    /** @var list<int>|null */
+    private ?array $only = null;
+
     /** How many accounts asked for a proxy after the pool was full. */
     public int $unassigned = 0;
+
+    /**
+     * Spread over these proxies rather than over the whole pool.
+     *
+     * What the proxy page asks for: a few proxies were picked, and the accounts
+     * are chosen to go behind them. The alternative -- start from the accounts
+     * and let the pool decide -- is the same operation from the other end, and
+     * it would be a second implementation of the same sort.
+     *
+     * @param  list<int>  $proxyIds
+     */
+    public function restrictTo(array $proxyIds): self
+    {
+        $this->only = $proxyIds;
+        $this->pool = null;
+
+        return $this;
+    }
 
     /**
      * The emptiest proxy that still has room, or null when the pool is full.
@@ -49,6 +70,7 @@ class ProxyAssigner
             $this->pool = Proxy::withoutGlobalScopes()
                 ->where('team_id', $teamId)
                 ->assignable()
+                ->when($this->only !== null, fn ($query) => $query->whereKey($this->only))
                 ->get(['id', 'assigned_count', 'max_accounts']);
         }
 

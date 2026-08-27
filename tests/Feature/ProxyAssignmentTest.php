@@ -170,4 +170,81 @@ class ProxyAssignmentTest extends TestCase
         // Otherwise it silently means clear_proxy, which is the opposite.
         $this->bulk('assign_proxy', [], $this->accounts(1))->assertStatus(422);
     }
+
+    #[Test]
+    public function accounts_are_spread_over_the_proxies_picked_on_the_proxy_page(): void
+    {
+        /*
+         * The same operation as spread_proxy, entered from the other end: a set
+         * of proxies is in hand and the accounts are chosen to go behind them.
+         * Only the picked proxies take accounts -- a third one sitting idle in
+         * the pool is not part of the answer.
+         */
+        $first = $this->proxy(['max_accounts' => 50]);
+        $second = $this->proxy(['max_accounts' => 50]);
+        $untouched = $this->proxy(['max_accounts' => 50]);
+
+        $this->postJson('/api/v1/proxies/assign', [
+            'ids' => [$first->id, $second->id],
+            'account_ids' => $this->accounts(4),
+        ])
+            ->assertOk()
+            ->assertJsonPath('assigned', 4)
+            ->assertJsonPath('unassigned', 0);
+
+        $this->assertSame(2, $first->fresh()->assigned_count);
+        $this->assertSame(2, $second->fresh()->assigned_count);
+        $this->assertSame(0, $untouched->fresh()->assigned_count);
+    }
+
+    #[Test]
+    public function accounts_beyond_the_picked_proxies_headroom_are_reported(): void
+    {
+        // The picked proxies are the whole pool for this operation, so running
+        // out of them is a real outcome and not a reason to reach for others.
+        $this->proxy(['max_accounts' => 50]);
+        $small = $this->proxy(['max_accounts' => 1]);
+
+        $this->postJson('/api/v1/proxies/assign', [
+            'ids' => [$small->id],
+            'account_ids' => $this->accounts(3),
+        ])
+            ->assertOk()
+            ->assertJsonPath('assigned', 1)
+            ->assertJsonPath('unassigned', 2);
+    }
+
+    #[Test]
+    public function another_teams_accounts_are_not_reachable_from_the_proxy_page(): void
+    {
+        $proxy = $this->proxy();
+
+        [$other] = $this->tenant();
+        $stranger = XAccount::factory()->create(['team_id' => $other->id, 'proxy_id' => null]);
+
+        TeamContext::set($this->team->id);
+
+        $this->postJson('/api/v1/proxies/assign', [
+            'ids' => [$proxy->id],
+            'account_ids' => [$stranger->id],
+        ])
+            ->assertOk()
+            ->assertJsonPath('assigned', 0);
+
+        $this->assertNull($stranger->fresh()->proxy_id);
+    }
+
+    #[Test]
+    public function the_picker_can_ask_for_only_the_accounts_without_a_proxy(): void
+    {
+        // Which is what the picker opens on: the accounts still leaving from
+        // the server's own IP are nearly always the ones being placed.
+        $proxy = $this->proxy();
+        XAccount::factory()->create(['team_id' => $this->team->id, 'proxy_id' => $proxy->id]);
+        XAccount::factory()->create(['team_id' => $this->team->id, 'proxy_id' => null]);
+
+        $this->getJson('/api/v1/accounts?without_proxy=1')
+            ->assertOk()
+            ->assertJsonCount(1, 'data');
+    }
 }

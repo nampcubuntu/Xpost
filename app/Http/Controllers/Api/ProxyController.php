@@ -9,6 +9,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\CheckProxy;
 use App\Models\Proxy;
 use App\Models\XAccount;
+use App\Services\Proxies\ProxyAssigner;
 use App\Services\Proxies\ProxyChecker;
 use App\Support\ProxyLine;
 use Illuminate\Database\Eloquent\Collection;
@@ -215,6 +216,58 @@ class ProxyController extends Controller
         }
 
         return response()->json(['queued' => $proxies->count()], 202);
+    }
+
+    /**
+     * These proxies, spread over those accounts.
+     *
+     * The same operation as spread_proxy on the accounts page, entered from the
+     * other end: there, a set of accounts is handed to the whole pool; here, a
+     * set of proxies is picked first and the accounts are chosen to go behind
+     * them. Both run through ProxyAssigner, so "emptiest first" and the
+     * max_accounts ceiling mean the same thing whichever page you started on.
+     */
+    public function assignAccounts(Request $request, ProxyAssigner $assigner): JsonResponse
+    {
+        $this->authorize('create', XAccount::class);
+
+        $request->validate([
+            'account_ids' => ['required', 'array', 'min:1', 'max:10000'],
+            'account_ids.*' => ['integer'],
+        ]);
+
+        $proxies = $this->selection($request);
+
+        if ($proxies->isEmpty()) {
+            return response()->json(['message' => 'Không tìm thấy proxy nào trong lựa chọn.'], 422);
+        }
+
+        $assigner->restrictTo($proxies->modelKeys());
+        $assigned = 0;
+
+        XAccount::query()
+            ->whereIn('id', $request->input('account_ids'))
+            // Chunked so the observer that maintains assigned_count still fires
+            // per row, and so ten thousand ids do not hold one long write lock.
+            ->chunkById(500, function ($accounts) use ($assigner, &$assigned): void {
+                foreach ($accounts as $account) {
+                    $proxy = $assigner->next($account->team_id);
+
+                    if ($proxy === null) {
+                        continue;
+                    }
+
+                    $account->forceFill(['proxy_id' => $proxy->id])->save();
+                    $assigned++;
+                }
+            });
+
+        return response()->json([
+            'assigned' => $assigned,
+            // Accounts that found the selected proxies full. Silence would read
+            // as "done" on accounts that still share one IP.
+            'unassigned' => $assigner->unassigned,
+        ]);
     }
 
     /**

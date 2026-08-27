@@ -39,6 +39,9 @@ class AccountController extends Controller
                 fn ($g) => $g->where('account_groups.id', $id)
             ))
             ->when($request->boolean('needs_reauth'), fn ($q) => $q->where('status', AccountStatus::NeedsReauth->value))
+            // The accounts still leaving from the server's own IP, which is the
+            // set the proxy picker is nearly always after.
+            ->when($request->boolean('without_proxy'), fn ($q) => $q->whereNull('proxy_id'))
             ->orderBy($this->sortColumn($request), $request->query('direction', 'desc') === 'asc' ? 'asc' : 'desc')
             ->paginate(min((int) $request->query('per_page', 50), 200))
             ->withQueryString();

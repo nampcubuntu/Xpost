@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import api, { validationErrors } from '../lib/api';
 
 const proxies = ref([]);
@@ -158,6 +158,108 @@ function pollWhilePending() {
 }
 
 onUnmounted(() => clearTimeout(pollTimer));
+
+/*
+ * Picking the accounts that go behind the selected proxies.
+ *
+ * The other direction already exists on the accounts page, where a set of
+ * accounts is handed to the whole pool. This is the same operation entered from
+ * the end you are standing at: proxies in hand, choose who uses them.
+ */
+const picker = ref(false);
+const pickerAccounts = ref([]);
+const pickerSelected = ref(new Set());
+const pickerSearch = ref('');
+const pickerUnassignedOnly = ref(true);
+const pickerMeta = ref(null);
+const pickerPage = ref(1);
+const pickerLoading = ref(false);
+
+const pickerAllSelected = computed(() => pickerAccounts.value.length > 0
+    && pickerAccounts.value.every((account) => pickerSelected.value.has(account.id)));
+
+async function loadPicker() {
+    pickerLoading.value = true;
+
+    try {
+        const { data } = await api.get('accounts', {
+            params: {
+                search: pickerSearch.value || undefined,
+                without_proxy: pickerUnassignedOnly.value ? 1 : undefined,
+                page: pickerPage.value,
+                per_page: 200,
+            },
+        });
+
+        pickerAccounts.value = data.data;
+        pickerMeta.value = data.meta;
+    } finally {
+        pickerLoading.value = false;
+    }
+}
+
+function openPicker() {
+    picker.value = true;
+    pickerSelected.value = new Set();
+    pickerPage.value = 1;
+    loadPicker();
+}
+
+let pickerTimer;
+watch([pickerSearch, pickerUnassignedOnly], () => {
+    pickerPage.value = 1;
+    clearTimeout(pickerTimer);
+    pickerTimer = setTimeout(loadPicker, 300);
+});
+watch(pickerPage, loadPicker);
+
+function togglePicked(id) {
+    pickerSelected.value.has(id) ? pickerSelected.value.delete(id) : pickerSelected.value.add(id);
+    pickerSelected.value = new Set(pickerSelected.value);
+}
+
+function togglePickedAll() {
+    // Read once, before the loop: mutating the Set is reactive, so the computed
+    // would flip half way through and the loop would undo its own work.
+    const clearing = pickerAllSelected.value;
+
+    // This page only. The selection survives paging, so several pages can be
+    // gathered up before assigning.
+    pickerAccounts.value.forEach((account) => {
+        clearing ? pickerSelected.value.delete(account.id) : pickerSelected.value.add(account.id);
+    });
+
+    pickerSelected.value = new Set(pickerSelected.value);
+}
+
+async function assignPicked() {
+    busy.value = true;
+
+    try {
+        const { data } = await api.post('proxies/assign', {
+            ids: [...selected.value],
+            account_ids: [...pickerSelected.value],
+        });
+
+        /*
+         * A selection that ran out of headroom has to say so. "Đã gán 500" over
+         * accounts that still share one IP is the wrong kind of true, and it is
+         * the exact state proxies exist to prevent.
+         */
+        window.alert(data.unassigned
+            ? `Đã gán ${data.assigned} tài khoản. Còn ${data.unassigned} chưa có proxy — `
+                + 'các proxy đã chọn hết chỗ. Chọn thêm proxy hoặc nâng "Tài khoản tối đa".'
+            : `Đã gán ${data.assigned} tài khoản vào ${selected.value.size} proxy.`);
+
+        picker.value = false;
+        selected.value = new Set();
+        await load();
+    } catch (error) {
+        window.alert(error.response?.data?.message ?? 'Không gán được.');
+    } finally {
+        busy.value = false;
+    }
+}
 
 async function checkSelected() {
     busy.value = true;
@@ -369,6 +471,9 @@ async function remove(proxy) {
             class="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-neutral-900/10 bg-neutral-900 px-4 py-2.5 text-[13px] text-white"
         >
             <span class="font-medium">Đã chọn {{ selected.size }}</span>
+            <button class="rounded px-2 py-1 transition hover:bg-white/15" :disabled="busy" @click="openPicker">
+                Gắn tài khoản
+            </button>
             <button class="rounded px-2 py-1 transition hover:bg-white/15" :disabled="busy" @click="checkSelected">
                 Kiểm tra
             </button>
@@ -376,6 +481,106 @@ async function remove(proxy) {
                 Xoá
             </button>
             <button class="ml-auto text-white/60 transition hover:text-white" @click="selected = new Set()">Bỏ chọn</button>
+        </div>
+
+        <!--
+            Choosing who goes behind the selected proxies.
+
+            A dialog rather than a page: the proxy selection is the context, and
+            navigating away to the accounts page would lose it.
+        -->
+        <div v-if="picker" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="picker = false">
+            <div class="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-xl">
+                <div class="border-b border-neutral-200 px-5 py-4">
+                    <h2 class="text-[15px] font-semibold">Gắn {{ selected.size }} proxy cho tài khoản</h2>
+                    <p class="mt-0.5 text-[12.5px] text-neutral-500">
+                        Tài khoản được chia đều vào các proxy đã chọn, proxy rỗng nhất trước.
+                    </p>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-3 border-b border-neutral-200 px-5 py-3">
+                    <input v-model="pickerSearch" class="xp-field max-w-[240px] py-1 text-[12.5px]" placeholder="Tìm @handle hoặc tên…">
+                    <label class="flex items-center gap-1.5 text-[12.5px] text-neutral-600">
+                        <input v-model="pickerUnassignedOnly" type="checkbox">
+                        Chỉ tài khoản chưa có proxy
+                    </label>
+                    <span v-if="pickerMeta" class="ml-auto text-[12.5px] text-neutral-500">
+                        {{ pickerMeta.total }} kết quả
+                    </span>
+                </div>
+
+                <div class="min-h-0 flex-1 overflow-y-auto">
+                    <table class="w-full text-left text-[13px]">
+                        <thead class="sticky top-0 border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
+                            <tr>
+                                <th class="w-10 py-2.5 pl-5 pr-1">
+                                    <input type="checkbox" :checked="pickerAllSelected" @change="togglePickedAll">
+                                </th>
+                                <th class="px-4 py-2.5 font-medium">Tài khoản</th>
+                                <th class="px-4 py-2.5 font-medium">Proxy hiện tại</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-neutral-100">
+                            <tr v-if="pickerLoading"><td colspan="3" class="px-5 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                            <tr v-else-if="!pickerAccounts.length">
+                                <td colspan="3" class="px-5 py-8 text-center text-neutral-500">
+                                    Không có tài khoản nào khớp.
+                                </td>
+                            </tr>
+
+                            <tr
+                                v-for="account in pickerAccounts"
+                                :key="account.id"
+                                class="cursor-pointer hover:bg-neutral-50"
+                                @click="togglePicked(account.id)"
+                            >
+                                <td class="w-10 py-2 pl-5 pr-1">
+                                    <input type="checkbox" :checked="pickerSelected.has(account.id)" @click.stop="togglePicked(account.id)">
+                                </td>
+                                <td class="px-4 py-2">
+                                    <p class="font-medium">{{ account.handle }}</p>
+                                    <p class="truncate text-xs text-neutral-500">{{ account.name }}</p>
+                                </td>
+                                <!--
+                                    Shown because reassigning is a real choice:
+                                    an account already behind a working proxy is
+                                    usually not the one you meant to move.
+                                -->
+                                <td class="px-4 py-2">
+                                    <span v-if="account.proxy" class="text-neutral-600">
+                                        {{ account.proxy.label ?? `#${account.proxy.id}` }}
+                                        <span class="text-xs text-neutral-400">{{ account.proxy.country || '' }}</span>
+                                    </span>
+                                    <span v-else class="text-xs text-amber-600">IP server</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-3 border-t border-neutral-200 px-5 py-3">
+                    <button
+                        v-if="pickerMeta && pickerMeta.last_page > 1"
+                        class="xp-btn-ghost"
+                        :disabled="pickerPage <= 1"
+                        @click="pickerPage--"
+                    >‹ Trước</button>
+                    <span v-if="pickerMeta && pickerMeta.last_page > 1" class="text-[12.5px] text-neutral-500">
+                        Trang {{ pickerMeta.current_page }}/{{ pickerMeta.last_page }}
+                    </span>
+                    <button
+                        v-if="pickerMeta && pickerMeta.last_page > 1"
+                        class="xp-btn-ghost"
+                        :disabled="pickerPage >= pickerMeta.last_page"
+                        @click="pickerPage++"
+                    >Sau ›</button>
+
+                    <button class="xp-btn-ghost ml-auto" @click="picker = false">Huỷ</button>
+                    <button class="xp-btn-primary" :disabled="busy || !pickerSelected.size" @click="assignPicked">
+                        Gắn {{ pickerSelected.size }} tài khoản
+                    </button>
+                </div>
+            </div>
         </div>
 
         <p v-if="pending.length" class="mb-3 text-[12.5px] text-neutral-500">

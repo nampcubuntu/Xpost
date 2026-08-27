@@ -8,11 +8,13 @@ use App\Enums\MediaCategory;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\PostMediaResource;
 use App\Models\PostMedia;
+use App\Support\VideoProbe;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 
 class MediaController extends Controller
 {
@@ -51,6 +53,21 @@ class MediaController extends Controller
 
         /** @var UploadedFile $file */
         $file = $request->file('file');
+
+        /*
+         * An .mp4 carrying only an audio track passes every check above: the
+         * extension, the mime type and the size are all a video's. It fails
+         * hours later inside a publish worker, as "Media transcoding failed:
+         * unknown" against a post whose account looked misconfigured. Say it
+         * here, while the file is still in front of whoever chose it.
+         */
+        if (str_starts_with((string) $file->getMimeType(), 'video/')
+            && VideoProbe::inspect($file->getRealPath()) === null) {
+            throw ValidationException::withMessages([
+                'file' => 'Tệp này không có luồng video (có thể chỉ chứa âm thanh). X sẽ từ chối khi đăng.',
+            ]);
+        }
+
         $hash = hash_file('sha256', $file->getRealPath());
 
         // The same asset uploaded twice reuses the row -- and with it the cached
@@ -139,14 +156,26 @@ class MediaController extends Controller
     }
 
     /** @return array{0: int|null, 1: int|null} */
+    /**
+     * @return array{0:int|null, 1:int|null}
+     */
     private function dimensions(UploadedFile $file): array
     {
-        if (! str_starts_with((string) $file->getMimeType(), 'image/')) {
-            return [null, null];
+        if (str_starts_with((string) $file->getMimeType(), 'image/')) {
+            $size = @getimagesize($file->getRealPath());
+
+            return $size === false ? [null, null] : [$size[0], $size[1]];
         }
 
-        $size = @getimagesize($file->getRealPath());
+        /*
+         * Read from the file rather than waiting for the browser to PATCH what
+         * a <video> element reported. The client answer arrives late, can not
+         * arrive at all, and is absent for anything uploaded through the API --
+         * and a video with no dimensions is exactly the case that has to be
+         * caught here.
+         */
+        $probed = VideoProbe::inspect($file->getRealPath());
 
-        return $size === false ? [null, null] : [$size[0], $size[1]];
+        return $probed === null ? [null, null] : [$probed['width'] ?: null, $probed['height'] ?: null];
     }
 }

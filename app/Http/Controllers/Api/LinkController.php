@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
 use App\Models\LinkDomain;
+use App\Models\Team;
 use App\Services\Links\CloudflareKvClient;
 use App\Services\Links\TinyUrlService;
 use Illuminate\Http\JsonResponse;
@@ -85,11 +86,39 @@ class LinkController extends Controller
      * same namespace, so the domain is a choice made when a link is used
      * rather than something stored against the key.
      */
-    public function domains(): JsonResponse
+    public function domains(Request $request): JsonResponse
     {
         $this->authorize('links.view');
 
-        return response()->json(['data' => $this->domainList()]);
+        return response()->json([
+            'data' => $this->domainList(),
+            'namespace_id' => Team::query()
+                ->whereKey($request->user()->current_team_id)
+                ->value('cloudflare_kv_namespace_id'),
+        ]);
+    }
+
+    /**
+     * Point this team at its own KV namespace.
+     *
+     * Not validated against Cloudflare here: a namespace the token cannot reach
+     * fails on the next listing with Cloudflare's own message, which says more
+     * than anything this could guess -- and refusing to save an id somebody is
+     * still setting up would be worse than storing it.
+     */
+    public function updateNamespace(Request $request): JsonResponse
+    {
+        $this->authorize('links.manage');
+
+        $data = $request->validate([
+            'namespace_id' => ['present', 'nullable', 'string', 'max:64', 'regex:/^[0-9a-f]{32}$/'],
+        ]);
+
+        Team::query()
+            ->whereKey($request->user()->current_team_id)
+            ->update(['cloudflare_kv_namespace_id' => $data['namespace_id'] ?: null]);
+
+        return response()->json(['namespace_id' => $data['namespace_id'] ?: null]);
     }
 
     /**
@@ -412,13 +441,26 @@ class LinkController extends Controller
         return $code;
     }
 
+    /**
+     * Which half is missing decides who fixes it.
+     *
+     * The account and token are the operator's, set once in .env. The namespace
+     * is this team's, and a team without one has no short-link store at all --
+     * telling them to edit .env would send them somewhere they cannot go.
+     */
     private function notConfigured(): JsonResponse
     {
+        $operatorReady = filled(config('xpost.links.account_id'))
+            && filled(config('xpost.links.api_token'));
+
         return response()->json([
-            'message' => 'Chưa cấu hình Cloudflare KV. Điền CLOUDFLARE_ACCOUNT_ID, '
-                .'CLOUDFLARE_KV_NAMESPACE_ID và CLOUDFLARE_API_TOKEN trong .env.',
+            'message' => $operatorReady
+                ? 'Team này chưa có KV namespace riêng. Nhập Namespace ID ở phần Domain.'
+                : 'Chưa cấu hình Cloudflare. Điền CLOUDFLARE_ACCOUNT_ID và CLOUDFLARE_API_TOKEN trong .env.',
             'data' => [],
             'configured' => false,
+            // So the page can offer the field instead of quoting an env file.
+            'needs_namespace' => $operatorReady,
         ], 422);
     }
 }

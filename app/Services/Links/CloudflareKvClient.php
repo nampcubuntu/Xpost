@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Links;
 
 use App\Exceptions\XApiException;
+use App\Models\Team;
+use App\Support\TeamContext;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -38,19 +40,59 @@ final class CloudflareKvClient
         private readonly int $timeout = 30,
     ) {}
 
+    /**
+     * The account and token are the operator's; the namespace is the team's.
+     *
+     * One Cloudflare account holds every namespace, so those two are global.
+     * The namespace is not: a shared one means any admin can list and delete
+     * another team's short links, which does not unpublish anything -- it makes
+     * a link in somebody else's live post stop resolving.
+     *
+     * A team without one is treated as unconfigured rather than falling back to
+     * a global namespace, because that fallback is the sharing it exists to
+     * prevent.
+     */
     public static function fromConfig(): self
     {
         return new self(
             accountId: (string) config('xpost.links.account_id'),
-            namespaceId: (string) config('xpost.links.namespace_id'),
+            // Empty, so every call resolves the namespace for whichever team is
+            // active then. See namespaceId().
+            namespaceId: '',
             token: (string) config('xpost.links.api_token'),
             timeout: (int) config('xpost.http.timeout', 30),
         );
     }
 
+    /**
+     * Resolved per call, never held.
+     *
+     * A namespace fixed at construction is a tenant baked into an object, and
+     * objects outlive requests in more places than they look like they do:
+     * Laravel caches a controller instance on its Route, so a second request in
+     * the same process reuses the first one -- and with it the first team's
+     * namespace. That reads one customer's short links into another's screen.
+     *
+     * The same reasoning applies under Octane and inside a queue worker
+     * handling jobs for several teams in a row. Resolving here costs one
+     * indexed lookup and removes the whole class of mistake.
+     */
+    private function namespaceId(): string
+    {
+        if ($this->namespaceId !== '') {
+            return $this->namespaceId;
+        }
+
+        $teamId = TeamContext::id();
+
+        return $teamId === null
+            ? ''
+            : (string) Team::query()->whereKey($teamId)->value('cloudflare_kv_namespace_id');
+    }
+
     public function isConfigured(): bool
     {
-        return filled($this->accountId) && filled($this->namespaceId) && filled($this->token);
+        return filled($this->accountId) && filled($this->namespaceId()) && filled($this->token);
     }
 
     /**
@@ -151,7 +193,7 @@ final class CloudflareKvClient
 
     private function url(string $path): string
     {
-        return self::BASE."/accounts/{$this->accountId}/storage/kv/namespaces/{$this->namespaceId}/{$path}";
+        return self::BASE."/accounts/{$this->accountId}/storage/kv/namespaces/{$this->namespaceId()}/{$path}";
     }
 
     /**

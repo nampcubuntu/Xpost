@@ -21,6 +21,13 @@ class Team extends Model
         // Null means no ceiling. A limit nobody chose, silently stopping a
         // campaign overnight, would be worse than none at all.
         'daily_budget_usd',
+        /*
+         * This team's own Cloudflare KV namespace. Per team rather than global
+         * because a shared one lets any admin list and delete another team's
+         * short links -- which does not unpublish anything, it makes a link in
+         * somebody else's live post stop resolving.
+         */
+        'cloudflare_kv_namespace_id',
     ];
 
     protected function casts(): array

@@ -27,11 +27,13 @@ class TinyUrlTest extends TestCase
     {
         parent::setUp();
 
-        [, $this->user] = $this->tenant();
+        [$team, $this->user] = $this->tenant();
+
+        // Per team, not config: a shared namespace is a shared store.
+        $team->forceFill(['cloudflare_kv_namespace_id' => 'ns456'])->save();
 
         config([
             'xpost.links.account_id' => 'acc',
-            'xpost.links.namespace_id' => 'ns',
             'xpost.links.api_token' => 'tok',
             'xpost.links.tinyurl.enabled' => true,
             'xpost.links.tinyurl.token' => null,

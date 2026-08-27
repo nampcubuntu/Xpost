@@ -121,6 +121,7 @@ Route::prefix('v1')->group(function (): void {
              * every code, so this is a choice, not a property of a key.
              */
             Route::get('link-domains', [LinkController::class, 'domains']);
+            Route::put('link-namespace', [LinkController::class, 'updateNamespace']);
             Route::post('link-domains', [LinkController::class, 'storeDomain']);
             Route::put('link-domains/{domain}', [LinkController::class, 'updateDomain']);
             Route::delete('link-domains/{domain}', [LinkController::class, 'destroyDomain']);

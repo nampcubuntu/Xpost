@@ -31,6 +31,9 @@ class TeamRoleTest extends TestCase
         parent::setUp();
 
         [$this->team] = $this->tenant();
+
+        // The short-link store is reached through the team's own namespace.
+        $this->team->forceFill(['cloudflare_kv_namespace_id' => 'ns456'])->save();
     }
 
     private function userWith(TeamRole $role): User
@@ -106,7 +109,6 @@ class TeamRoleTest extends TestCase
 
         config([
             'xpost.links.account_id' => 'acc',
-            'xpost.links.namespace_id' => 'ns',
             'xpost.links.api_token' => 'tok',
         ]);
 
@@ -133,7 +135,6 @@ class TeamRoleTest extends TestCase
 
         config([
             'xpost.links.account_id' => 'acc',
-            'xpost.links.namespace_id' => 'ns',
             'xpost.links.api_token' => 'tok',
         ]);
 

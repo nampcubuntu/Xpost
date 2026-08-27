@@ -26,11 +26,17 @@ class LinkStoreTest extends TestCase
     {
         parent::setUp();
 
-        [, $this->user] = $this->tenant();
+        [$team, $this->user] = $this->tenant();
+
+        /*
+         * The namespace belongs to the team, not to config: a shared one lets
+         * any admin list and delete another team's links. A team without one
+         * has no short-link store at all.
+         */
+        $team->forceFill(['cloudflare_kv_namespace_id' => 'ns456'])->save();
 
         config([
             'xpost.links.account_id' => 'acc123',
-            'xpost.links.namespace_id' => 'ns456',
             'xpost.links.api_token' => 'token789',
             'xpost.links.base_url' => 'https://l.example.com',
         ]);

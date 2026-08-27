@@ -45,12 +45,16 @@ const currentHost = computed(() => activeDomains.value.find((d) => d.id === view
     ?? activeDomains.value[0]
     ?? null);
 
-// Keys carry a prefix so one namespace can hold more than one kind of entry;
-// the Worker is reached by the code alone.
-const codeOf = (key) => (key.includes(':') ? key.slice(key.lastIndexOf(':') + 1) : key);
+/*
+ * The prefix that separates kinds of entry in the namespace is the same thing
+ * that routes them at the Worker: `r:abc` is stored under one colon and served
+ * from `/r/abc`. Dropping the prefix instead produced links that looked right
+ * and resolved to nothing.
+ */
+const pathFor = (key) => key.replaceAll(':', '/');
 
 const shortUrl = (key) => (currentHost.value
-    ? `https://${currentHost.value.host}/${codeOf(key)}`
+    ? `https://${currentHost.value.host}/${pathFor(key)}`
     : null);
 
 async function addDomain() {
@@ -444,32 +448,42 @@ onMounted(load);
 
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
-                <table class="w-full min-w-[760px] text-left text-[13px]">
+                <table class="w-full min-w-[920px] text-left text-[13px]">
                     <thead class="border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
                         <tr>
                             <th class="px-4 py-2.5 font-medium">Key</th>
+                            <th class="px-4 py-2.5 font-medium">Short link</th>
                             <th class="px-4 py-2.5 font-medium">Value</th>
                             <th class="w-24 px-4 py-2.5"></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
-                        <tr v-if="loading"><td colspan="3" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                        <tr v-if="loading"><td colspan="4" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
                         <tr v-else-if="!rows.length">
-                            <td colspan="3" class="px-4 py-8 text-center text-neutral-500">Chưa có cặp nào.</td>
+                            <td colspan="4" class="px-4 py-8 text-center text-neutral-500">Chưa có cặp nào.</td>
                         </tr>
 
                         <tr v-for="row in rows" :key="row.key" class="hover:bg-neutral-50">
+                            <td class="whitespace-nowrap px-4 py-2.5 align-top font-mono">{{ row.key }}</td>
+
+                            <!--
+                                Its own column: this is the value that gets
+                                copied into a post, and reading it under the key
+                                meant scanning two lines per row to find it.
+                            -->
                             <td class="px-4 py-2.5 align-top">
-                                <p class="font-mono">{{ row.key }}</p>
                                 <button
                                     v-if="shortUrl(row.key)"
-                                    class="mt-0.5 flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
+                                    class="flex items-center gap-1 font-mono text-[12px] text-blue-600 hover:underline"
+                                    :title="'Sao chép ' + shortUrl(row.key)"
                                     @click="copy(shortUrl(row.key))"
                                 >
-                                    <NavIcon name="copy" :size="11" />
+                                    <NavIcon name="copy" :size="11" class="shrink-0" />
                                     {{ shortUrl(row.key) }}
                                 </button>
+                                <span v-else class="text-[12px] text-neutral-400">chưa có domain</span>
                             </td>
+
                             <td class="px-4 py-2.5 align-top">
                                 <p class="break-all font-mono text-[12px] text-neutral-700">{{ row.value ?? '—' }}</p>
                             </td>

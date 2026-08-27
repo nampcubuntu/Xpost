@@ -45,17 +45,19 @@ class LinkDomain extends Model
 
     public function url(string $key): string
     {
-        return 'https://'.$this->host.'/'.self::codeFrom($key);
+        return 'https://'.$this->host.'/'.self::pathFor($key);
     }
 
     /**
-     * The part of a key the Worker resolves by.
+     * The path the Worker resolves a key by.
      *
-     * Keys are stored with a prefix (`r:abc`) so a namespace can hold more than
-     * one kind of entry, but the Worker is reached by the code alone.
+     * The prefix that separates kinds of entry in the namespace is the same
+     * thing that routes them at the Worker: `r:abc` is stored under one colon
+     * and served from `/r/abc`. Dropping the prefix instead produced links
+     * that looked right and resolved to nothing.
      */
-    public static function codeFrom(string $key): string
+    public static function pathFor(string $key): string
     {
-        return str_contains($key, ':') ? substr($key, strrpos($key, ':') + 1) : $key;
+        return str_replace(':', '/', $key);
     }
 }

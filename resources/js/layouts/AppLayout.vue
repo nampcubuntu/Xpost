@@ -162,8 +162,10 @@ async function logout() {
                     <p class="px-3.5 pb-0.5 pt-4 text-[11.5px] text-neutral-400">{{ group.heading }}</p>
 
                     <!--
-                        Active state is a 2px rule against the sidebar edge, the way
-                        the reference marks it -- not a filled pill.
+                        Active state is a rule against the sidebar edge and a solid
+                        icon, the way the reference marks it -- not a filled pill.
+                        The rule alone was doing all the work: on a 1.3px stroke a
+                        colour change is invisible until you look straight at it.
 
                         Bound explicitly rather than via RouterLink's `active-class`:
                         Tailwind 4 does not scan that attribute, so arbitrary variants
@@ -180,11 +182,12 @@ async function logout() {
                     >
                         <span
                             v-if="isActive(item.name)"
-                            class="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r bg-neutral-900"
+                            class="absolute left-0 top-1/2 h-[18px] w-[2.5px] -translate-y-1/2 rounded-r bg-neutral-900"
                         ></span>
                         <NavIcon
                             :name="item.icon"
                             :size="16"
+                            :active="isActive(item.name)"
                             :class="isActive(item.name) ? 'text-neutral-900' : 'text-neutral-400'"
                         />
                         {{ item.label }}

@@ -8,6 +8,7 @@ const meta = ref(null);
 const stats = ref(null);
 const groups = ref([]);
 const apps = ref([]);
+const proxies = ref([]);
 const loading = ref(true);
 const busy = ref(false);
 const flash = ref(null);
@@ -56,14 +57,16 @@ onMounted(async () => {
      * behind a tunnel is most of a second, more than the four queries put
      * together.
      */
-    const [, groupResponse, appResponse] = await Promise.all([
+    const [, groupResponse, appResponse, proxyResponse] = await Promise.all([
         load(),
         api.get('account-groups'),
         api.get('apps'),
+        api.get('proxies'),
     ]);
 
     groups.value = groupResponse.data.data;
     apps.value = appResponse.data.data;
+    proxies.value = proxyResponse.data.data;
 });
 
 let timer;
@@ -104,13 +107,46 @@ async function runBulk(action, extra = {}) {
             ...extra,
         });
 
-        flash.value = { type: 'ok', message: `Đã áp dụng cho ${data.affected} tài khoản.` };
+        /*
+         * A spread that ran out of proxies has to say so. "Đã áp dụng cho 500"
+         * on accounts that still share one IP is the wrong kind of true.
+         */
+        flash.value = data.unassigned
+            ? {
+                type: 'error',
+                message: `Đã gán cho ${data.affected - data.unassigned} tài khoản. `
+                    + `Còn ${data.unassigned} chưa có proxy — pool đã hết chỗ, thêm proxy hoặc nâng "Tài khoản tối đa".`,
+            }
+            : { type: 'ok', message: `Đã áp dụng cho ${data.affected} tài khoản.` };
         selected.value = new Set();
         await load();
     } catch (error) {
         flash.value = { type: 'error', message: error.response?.data?.message ?? 'Thao tác thất bại.' };
     } finally {
         busy.value = false;
+    }
+}
+
+/*
+ * A dead proxy is not somewhere to send accounts, so it is not offered.
+ * Assigning to one would look like it worked and fail at publish instead.
+ */
+const assignableProxies = computed(() => proxies.value.filter(
+    (proxy) => proxy.is_active && proxy.health_status !== 'dead',
+));
+
+function onProxyPick(select) {
+    const value = select.value;
+    // Reset first: picking the same option twice has to fire twice, and a
+    // select that keeps its choice reads as a filter rather than an action.
+    select.value = '';
+
+    if (value === 'spread') {
+        runBulk('spread_proxy');
+    } else if (value === 'clear') {
+        runBulk('clear_proxy');
+    } else if (value) {
+        runBulk('assign_proxy', { proxy_id: Number(value) });
     }
 }
 
@@ -398,6 +434,29 @@ async function connectAccount(flow) {
                 </select>
 
                 <!--
+                    Which IP these accounts walk out of.
+
+                    "Chia đều" is the one that matters: the whole reason for
+                    holding proxies is that a thousand accounts do not leave
+                    from one address, and doing that by hand is a thousand
+                    dropdowns. Picking a single proxy is for the accounts that
+                    have to sit on a particular exit.
+                -->
+                <select
+                    class="xp-field max-w-[220px]"
+                    :disabled="busy"
+                    @change="onProxyPick($event.target)"
+                >
+                    <option value="">Gán proxy…</option>
+                    <option value="spread">Chia đều vào pool</option>
+                    <option value="clear">— Bỏ proxy —</option>
+                    <option v-for="proxy in assignableProxies" :key="proxy.id" :value="proxy.id">
+                        {{ proxy.label || `${proxy.host}:${proxy.port}` }}
+                        — {{ proxy.country || '?' }} · {{ proxy.assigned_count }}/{{ proxy.max_accounts }}
+                    </option>
+                </select>
+
+                <!--
                     Where these accounts actually are. It is what "đăng lúc 09:00
                     giờ địa phương" resolves against, and the pool is global, so
                     it has to be settable in bulk rather than one row at a time.
@@ -427,6 +486,7 @@ async function connectAccount(flow) {
                         <th class="px-4 py-2.5 font-medium">Tài khoản</th>
                         <th class="px-4 py-2.5 font-medium">Trạng thái</th>
                         <th class="px-4 py-2.5 font-medium">X App</th>
+                        <th class="px-4 py-2.5 font-medium">Proxy</th>
                         <th class="px-4 py-2.5 font-medium">Ads account</th>
                         <th class="px-4 py-2.5 font-medium">Sức khoẻ</th>
                         <th class="px-4 py-2.5 font-medium">Hạn mức/ngày</th>
@@ -435,9 +495,9 @@ async function connectAccount(flow) {
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-neutral-100">
-                    <tr v-if="loading"><td colspan="9" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                    <tr v-if="loading"><td colspan="10" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
                     <tr v-else-if="!accounts.length">
-                        <td colspan="9" class="px-4 py-8 text-center text-neutral-500">
+                        <td colspan="10" class="px-4 py-8 text-center text-neutral-500">
                             Chưa có tài khoản nào. Kết nối qua OAuth, hoặc import hàng loạt bằng
                             <code class="rounded bg-neutral-100 px-1">php artisan xpost:import-accounts</code>.
                         </td>
@@ -463,6 +523,26 @@ async function connectAccount(flow) {
                             </span>
                         </td>
                         <td class="px-4 py-2.5 text-neutral-600">{{ account.app?.name ?? '—' }}</td>
+
+                        <!--
+                            An account with no proxy leaves from the server's own
+                            IP, alongside every other account with no proxy. That
+                            is the state worth seeing at a glance, so it is
+                            flagged rather than left as a dash.
+                        -->
+                        <td class="px-4 py-2.5">
+                            <template v-if="account.proxy">
+                                <span
+                                    class="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                                    :class="account.proxy.health_status === 'healthy' ? 'bg-green-500'
+                                        : account.proxy.health_status === 'dead' ? 'bg-red-500' : 'bg-neutral-300'"
+                                    :title="account.proxy.health_status"
+                                ></span>
+                                <span class="text-neutral-700">{{ account.proxy.label ?? `#${account.proxy.id}` }}</span>
+                                <span class="ml-1 text-xs text-neutral-500">{{ account.proxy.country || '' }}</span>
+                            </template>
+                            <span v-else class="text-xs text-amber-600" title="Đi ra bằng IP của server">IP server</span>
+                        </td>
 
                         <!--
                             Which ads account mints this account's cards.

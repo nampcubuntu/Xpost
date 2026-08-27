@@ -11,9 +11,11 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\XAccountResource;
 use App\Jobs\RefreshAccountToken;
 use App\Models\XAccount;
+use App\Services\Proxies\ProxyAssigner;
 use App\Services\X\TimezoneGuesser;
 use App\Services\X\XAdsAccountLister;
 use App\Services\X\XAppSelector;
+use App\Support\TeamContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -61,8 +63,10 @@ class AccountController extends Controller
             'timezone' => ['nullable', 'timezone'],
             // X Ads account id, e.g. 18ce55wllne -- lets this account build cards.
             'ads_account_id' => ['nullable', 'string', 'max:32'],
-            'proxy_id' => ['nullable', 'integer', Rule::exists('proxies', 'id')],
-            'x_app_id' => ['nullable', 'integer', Rule::exists('x_apps', 'id')],
+            // Scoped to the team, not just to the table: an id from a browser
+            // must not put this account behind another team's proxy or app.
+            'proxy_id' => ['nullable', 'integer', Rule::exists('proxies', 'id')->where('team_id', TeamContext::id())],
+            'x_app_id' => ['nullable', 'integer', Rule::exists('x_apps', 'id')->where('team_id', TeamContext::id())],
         ]);
 
         // A timezone typed by a person outranks any later guess run.
@@ -139,19 +143,32 @@ class AccountController extends Controller
      * assigned_count still fire, and so a 10k selection does not hold one long
      * write lock.
      */
-    public function bulk(Request $request): JsonResponse
+    public function bulk(Request $request, ProxyAssigner $proxies): JsonResponse
     {
         $this->authorize('create', XAccount::class);
 
+        /*
+         * Every id is checked against this team, not just against the table.
+         * These arrive from a browser, and `exists` alone would let one team
+         * put its accounts behind another team's proxy or app.
+         */
+        $team = TeamContext::id();
+        $onTeam = fn (string $table) => Rule::exists($table, 'id')->where('team_id', $team);
+
         $data = $request->validate([
-            'action' => ['required', 'in:enable,disable,delete,assign_app,assign_group,remove_group,set_cap,set_timezone,guess_timezone,refresh_token'],
+            'action' => ['required', 'in:enable,disable,delete,assign_app,assign_group,remove_group,set_cap,set_timezone,guess_timezone,refresh_token,assign_proxy,spread_proxy,clear_proxy'],
             'account_ids' => ['required', 'array', 'min:1', 'max:10000'],
             'account_ids.*' => ['integer'],
-            'app_id' => ['nullable', 'integer', Rule::exists('x_apps', 'id')],
-            'group_id' => ['nullable', 'integer', Rule::exists('account_groups', 'id')],
+            'app_id' => ['nullable', 'integer', $onTeam('x_apps')],
+            'group_id' => ['nullable', 'integer', $onTeam('account_groups')],
+            'proxy_id' => ['nullable', 'integer', $onTeam('proxies')],
             'daily_post_cap' => ['nullable', 'integer', 'min:0', 'max:2000'],
             'timezone' => ['nullable', 'timezone'],
         ]);
+
+        if ($data['action'] === 'assign_proxy' && ($data['proxy_id'] ?? null) === null) {
+            return response()->json(['message' => 'Chưa chọn proxy nào.'], 422);
+        }
 
         $affected = 0;
 
@@ -160,19 +177,40 @@ class AccountController extends Controller
             // guess_timezone reads the proxy's country; without this it is one
             // extra query per account across a selection of up to 10,000.
             ->with('proxy:id,country')
-            ->chunkById(500, function ($accounts) use ($data, &$affected): void {
+            ->chunkById(500, function ($accounts) use ($data, $proxies, &$affected): void {
                 foreach ($accounts as $account) {
-                    $this->applyBulkAction($account, $data);
+                    $this->applyBulkAction($account, $data, $proxies);
                     $affected++;
                 }
             });
 
-        return response()->json(['affected' => $affected, 'action' => $data['action']]);
+        return response()->json([
+            'affected' => $affected,
+            'action' => $data['action'],
+            // How many asked for a proxy and found the pool full. Silence here
+            // would read as "done" on accounts that still share one IP.
+            'unassigned' => $proxies->unassigned,
+        ]);
     }
 
-    private function applyBulkAction(XAccount $account, array $data): void
+    private function applyBulkAction(XAccount $account, array $data, ProxyAssigner $proxies): void
     {
         match ($data['action']) {
+            /*
+             * Which IP this account walks out of.
+             *
+             * spread_proxy is the one that matters at scale: the reason for
+             * holding proxies at all is that a thousand accounts do not leave
+             * from one address, and sharing them out by hand is a thousand
+             * dropdowns. assign_proxy is for the cases where a particular
+             * account has to sit on a particular exit.
+             */
+            'assign_proxy' => $account->forceFill(['proxy_id' => $data['proxy_id']])->save(),
+            'spread_proxy' => $account->forceFill([
+                'proxy_id' => $proxies->next($account->team_id)?->id ?? $account->proxy_id,
+            ])->save(),
+            'clear_proxy' => $account->forceFill(['proxy_id' => null])->save(),
+
             'enable' => $account->forceFill([
                 'status' => AccountStatus::Active,
                 'cooldown_until' => null,

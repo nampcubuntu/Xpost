@@ -14,12 +14,15 @@ const auth = useAuthStore();
 
 const members = ref([]);
 const roles = ref([]);
+const teams = ref([]);
+const spansTeams = ref(false);
 const loading = ref(true);
 const busy = ref(null);
 const flash = ref(null);
 
 const newEmail = ref('');
 const newRole = ref('editor');
+const newTeam = ref(null);
 
 const canManage = computed(() => auth.can('manage_accounts'));
 
@@ -33,6 +36,10 @@ async function load() {
         const { data } = await api.get('members');
         members.value = data.data;
         roles.value = data.roles;
+        teams.value = data.teams ?? [];
+        // Only the operator's view spans teams, so only it needs the column.
+        spansTeams.value = data.spans_teams === true;
+        newTeam.value ??= teams.value[0]?.id ?? null;
     } finally {
         loading.value = false;
     }
@@ -57,7 +64,13 @@ function setRole(member, role) {
         return;
     }
 
-    act(member.id, () => api.put(`members/${member.id}`, { role }), `${member.name}: đã đổi vai trò.`);
+    // The row carries its own team, because the operator's list spans several
+    // and "the team I am signed into" would name the wrong one.
+    act(
+        member.id,
+        () => api.put(`members/${member.id}`, { role, team_id: member.team_id }),
+        `${member.name}: đã đổi vai trò.`,
+    );
 }
 
 function addMember() {
@@ -67,7 +80,7 @@ function addMember() {
         return;
     }
 
-    act('new', () => api.post('members', { email, role: newRole.value }), `Đã thêm ${email}.`)
+    act('new', () => api.post('members', { email, role: newRole.value, team_id: newTeam.value }), `Đã thêm ${email}.`)
         .then(() => { newEmail.value = ''; });
 }
 
@@ -77,7 +90,7 @@ function removeMember(member) {
         return;
     }
 
-    act(member.id, () => api.delete(`members/${member.id}`), `Đã xoá ${member.name}.`);
+    act(member.id, () => api.delete(`members/${member.id}`, { data: { team_id: member.team_id } }), `Đã xoá ${member.name}.`);
 }
 
 onMounted(load);
@@ -88,7 +101,8 @@ onMounted(load);
         <div class="mb-5">
             <h1 class="text-xl font-semibold">Thành viên</h1>
             <p class="mt-1 text-[13px] text-neutral-500">
-                Ai ở trong team {{ auth.currentTeam?.name }} và họ được làm gì.
+                <template v-if="spansTeams">Mọi thành viên trên toàn hệ thống và họ được làm gì.</template>
+                <template v-else>Ai ở trong team {{ auth.currentTeam?.name }} và họ được làm gì.</template>
             </p>
         </div>
 
@@ -112,6 +126,15 @@ onMounted(load);
                 <span class="xp-label">Email</span>
                 <input v-model="newEmail" type="email" class="xp-field" placeholder="nguoi@example.com">
             </label>
+
+            <!-- A tenant only ever adds to their own team; the operator picks. -->
+            <label v-if="spansTeams" class="space-y-1 sm:col-span-3 sm:max-w-[260px]">
+                <span class="xp-label">Team</span>
+                <select v-model="newTeam" class="xp-field">
+                    <option v-for="team in teams" :key="team.id" :value="team.id">{{ team.name }}</option>
+                </select>
+            </label>
+
             <label class="space-y-1">
                 <span class="xp-label">Vai trò</span>
                 <select v-model="newRole" class="xp-field">
@@ -137,14 +160,15 @@ onMounted(load);
                     <thead class="border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
                         <tr>
                             <th class="px-4 py-2.5 font-medium">Người dùng</th>
+                            <th v-if="spansTeams" class="px-4 py-2.5 font-medium">Team</th>
                             <th class="px-4 py-2.5 font-medium">Vai trò</th>
                             <th class="w-20 px-4 py-2.5"></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
-                        <tr v-if="loading"><td colspan="3" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                        <tr v-if="loading"><td :colspan="spansTeams ? 4 : 3" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
 
-                        <tr v-for="member in members" :key="member.id" class="hover:bg-neutral-50">
+                        <tr v-for="member in members" :key="`${member.team_id}-${member.id}`" class="hover:bg-neutral-50">
                             <td class="px-4 py-2.5">
                                 <p class="font-medium">
                                     {{ member.name }}
@@ -152,6 +176,13 @@ onMounted(load);
                                 </p>
                                 <p class="text-xs text-neutral-500">{{ member.email }}</p>
                             </td>
+
+                            <!--
+                                Only the operator sees more than one team, and
+                                a row without its team would be ambiguous the
+                                moment the same person is on two of them.
+                            -->
+                            <td v-if="spansTeams" class="px-4 py-2.5 text-neutral-600">{{ member.team_name }}</td>
 
                             <td class="px-4 py-2.5">
                                 <!--

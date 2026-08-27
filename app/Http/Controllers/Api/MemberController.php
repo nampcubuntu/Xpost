@@ -30,44 +30,70 @@ class MemberController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $team = $this->team($request);
-
         $this->authorize('viewAny', User::class);
 
+        $isOperator = $request->user()->isPlatformOperator();
+
         /*
-         * The operator is on every team and is not a teammate.
+         * The operator sees every team at once; everyone else sees their own.
          *
-         * They hold owner on all of them so a customer cannot delete an app or
-         * appoint owners -- but listing them here shows every customer the
-         * operator's name and email, and offers buttons that only ever refuse.
-         * They are part of the plumbing, not part of the team.
+         * They are already a member of all of them, so this shows nothing they
+         * could not reach by switching teams one at a time -- it just stops
+         * that being the only way to answer "who is on my platform".
          */
-        $members = $team->members()->orderBy('name')->get()
-            ->reject(fn (User $member) => $member->isPlatformOperator()
-                && ! $request->user()->isPlatformOperator());
+        $teams = $isOperator
+            ? Team::query()->orderBy('name')->get()
+            : Team::query()->whereKey($request->user()->current_team_id)->get();
+
+        $rows = collect();
+
+        foreach ($teams as $team) {
+            foreach ($team->members()->orderBy('name')->get() as $member) {
+                /*
+                 * The operator is on every team and is not a teammate.
+                 *
+                 * They hold owner on all of them so a customer cannot delete an
+                 * app or appoint owners -- but listing them shows every customer
+                 * the operator's name and email, and offers buttons that only
+                 * ever refuse. They are plumbing, not membership.
+                 */
+                if ($member->isPlatformOperator() && ! $isOperator) {
+                    continue;
+                }
+
+                $rows->push([
+                    'id' => $member->id,
+                    'name' => $member->name,
+                    'email' => $member->email,
+                    'team_id' => $team->id,
+                    'team_name' => $team->name,
+                    'role' => $member->pivot->role,
+                    'role_label' => TeamRole::tryFromRole($member->pivot->role)?->label() ?? $member->pivot->role,
+                    'is_you' => $member->id === $request->user()->id,
+                ]);
+            }
+        }
 
         return response()->json([
-            'data' => $members->values()->map(fn (User $member) => [
-                'id' => $member->id,
-                'name' => $member->name,
-                'email' => $member->email,
-                'role' => $member->pivot->role,
-                'role_label' => TeamRole::tryFromRole($member->pivot->role)?->label() ?? $member->pivot->role,
-                'is_you' => $member->id === $request->user()->id,
-            ]),
+            'data' => $rows->values(),
+            // Only the operator's view spans teams, so only it needs the column.
+            'spans_teams' => $isOperator,
             'roles' => collect(TeamRole::cases())->map(fn (TeamRole $role) => [
                 'value' => $role->value,
                 'label' => $role->label(),
                 // What the caller may actually hand out.
-                'assignable' => $this->actingRole($request)?->atLeast($role) ?? false,
+                'assignable' => $isOperator || ($this->actingRole($request)?->atLeast($role) ?? false),
             ]),
+            'teams' => $isOperator
+                ? $teams->map(fn (Team $team) => ['id' => $team->id, 'name' => $team->name])
+                : [],
         ]);
     }
 
     /** Add someone who already has an account. */
     public function store(Request $request): JsonResponse
     {
-        $team = $this->team($request);
+        $team = $this->targetTeam($request);
         $this->authorize('create', User::class);
 
         $data = $request->validate([
@@ -76,7 +102,7 @@ class MemberController extends Controller
         ]);
 
         $role = TeamRole::from($data['role']);
-        $this->assertCanGrant($request, $role);
+        $this->assertCanGrant($request, $role, $team);
 
         $user = User::query()->where('email', $data['email'])->first();
 
@@ -103,7 +129,7 @@ class MemberController extends Controller
 
     public function update(Request $request, User $member): JsonResponse
     {
-        $team = $this->team($request);
+        $team = $this->targetTeam($request, $member);
         $this->authorize('update', $member);
 
         $data = $request->validate(['role' => ['required', Rule::enum(TeamRole::class)]]);
@@ -112,7 +138,7 @@ class MemberController extends Controller
         $this->assertOnTeam($team, $member);
         $this->assertNotTheOperator($request, $member);
         $this->assertNotSelf($request, $member, 'Không tự đổi vai trò của chính mình.');
-        $this->assertCanGrant($request, $role);
+        $this->assertCanGrant($request, $role, $team);
         $this->assertOwnerRemains($team, $member, $role);
 
         $team->members()->updateExistingPivot($member->id, ['role' => $role->value]);
@@ -122,7 +148,7 @@ class MemberController extends Controller
 
     public function destroy(Request $request, User $member): JsonResponse
     {
-        $team = $this->team($request);
+        $team = $this->targetTeam($request, $member);
         $this->authorize('delete', $member);
 
         $this->assertOnTeam($team, $member);
@@ -149,9 +175,46 @@ class MemberController extends Controller
         return Team::query()->findOrFail($request->user()->current_team_id);
     }
 
-    private function actingRole(Request $request): ?TeamRole
+    /**
+     * Which team a request is acting on.
+     *
+     * A tenant always acts on the one they are signed into. The operator may
+     * name another, because their view spans every team and editing a row from
+     * it should not require switching first.
+     */
+    private function targetTeam(Request $request, ?User $member = null): Team
     {
-        return $request->user()->teamRole($request->user()->current_team_id);
+        if (! $request->user()->isPlatformOperator()) {
+            return $this->team($request);
+        }
+
+        if ($request->filled('team_id')) {
+            return Team::query()->findOrFail((int) $request->input('team_id'));
+        }
+
+        /*
+         * Falling back to the member's own team rather than the caller's: the
+         * operator is on every team, so "their current team" says nothing about
+         * which row was clicked.
+         */
+        $teamId = $member?->teams()->first()?->id ?? $request->user()->current_team_id;
+
+        return Team::query()->findOrFail($teamId);
+    }
+
+    /**
+     * The role the caller is acting with.
+     *
+     * The operator holds owner everywhere, so their level does not depend on
+     * which team is being edited.
+     */
+    private function actingRole(Request $request, ?Team $team = null): ?TeamRole
+    {
+        if ($request->user()->isPlatformOperator()) {
+            return TeamRole::Owner;
+        }
+
+        return $request->user()->teamRole(($team ?? $this->team($request))->id);
     }
 
     /**
@@ -160,10 +223,10 @@ class MemberController extends Controller
      * Without this an admin promotes themselves to owner through a second
      * account, and the level stops meaning anything.
      */
-    private function assertCanGrant(Request $request, TeamRole $role): void
+    private function assertCanGrant(Request $request, TeamRole $role, ?Team $team = null): void
     {
         abort_unless(
-            $this->actingRole($request)?->atLeast($role) ?? false,
+            $this->actingRole($request, $team)?->atLeast($role) ?? false,
             403,
             'Không thể cấp vai trò cao hơn vai trò của bạn.',
         );

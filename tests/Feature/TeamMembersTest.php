@@ -257,6 +257,91 @@ class TeamMembersTest extends TestCase
     }
 
     #[Test]
+    public function the_operator_sees_every_team_at_once(): void
+    {
+        /*
+         * They are already on all of them, so this shows nothing they could not
+         * reach by switching teams one at a time -- it stops that being the only
+         * way to answer "who is on my platform".
+         */
+        config(['xpost.platform_owner_email' => 'operator@xpost.test']);
+
+        $operator = User::factory()->create([
+            'email' => 'operator@xpost.test',
+            'current_team_id' => $this->team->id,
+        ]);
+        $this->team->members()->attach($operator->id, ['role' => TeamRole::Owner->value]);
+
+        [$other, $stranger] = $this->tenant();
+        $other->members()->attach($operator->id, ['role' => TeamRole::Owner->value]);
+
+        $rows = $this->actingAs($operator->refresh())
+            ->getJson('/api/v1/members')
+            ->assertOk()
+            ->assertJsonPath('spans_teams', true)
+            ->json('data');
+
+        $this->assertTrue(collect($rows)->pluck('email')->contains($stranger->email));
+        // Every row names its team, or the same person on two of them is
+        // ambiguous.
+        $this->assertTrue(collect($rows)->every(fn ($row) => filled($row['team_name'])));
+    }
+
+    #[Test]
+    public function the_operator_edits_a_member_of_another_team(): void
+    {
+        config(['xpost.platform_owner_email' => 'operator@xpost.test']);
+
+        $operator = User::factory()->create([
+            'email' => 'operator@xpost.test',
+            'current_team_id' => $this->team->id,
+        ]);
+        $this->team->members()->attach($operator->id, ['role' => TeamRole::Owner->value]);
+
+        [$other] = $this->tenant();
+        $their = User::factory()->create(['current_team_id' => $other->id]);
+        $other->members()->attach($their->id, ['role' => TeamRole::Member->value]);
+
+        // The row carries its own team; "the team I am signed into" would name
+        // the wrong one.
+        $this->actingAs($operator->refresh())
+            ->putJson("/api/v1/members/{$their->id}", ['role' => 'admin', 'team_id' => $other->id])
+            ->assertOk();
+
+        $this->assertSame('admin', $their->fresh()->roleOn($other));
+    }
+
+    #[Test]
+    public function a_customer_admin_stays_inside_their_own_team(): void
+    {
+        // The other half of the same rule: naming another team must not reach
+        // into it.
+        [$other] = $this->tenant();
+        $their = User::factory()->create(['current_team_id' => $other->id]);
+        $other->members()->attach($their->id, ['role' => TeamRole::Member->value]);
+
+        $this->actingAs($this->memberWith(TeamRole::Admin))
+            ->putJson("/api/v1/members/{$their->id}", ['role' => 'admin', 'team_id' => $other->id])
+            ->assertNotFound();
+
+        $this->assertSame('member', $their->fresh()->roleOn($other));
+    }
+
+    #[Test]
+    public function a_customer_never_sees_another_team(): void
+    {
+        [$other, $stranger] = $this->tenant();
+
+        $rows = $this->actingAs($this->memberWith(TeamRole::Admin))
+            ->getJson('/api/v1/members')
+            ->assertOk()
+            ->assertJsonPath('spans_teams', false)
+            ->json('data');
+
+        $this->assertFalse(collect($rows)->pluck('email')->contains($stranger->email));
+    }
+
+    #[Test]
     public function a_member_of_another_team_is_not_reachable(): void
     {
         // Route model binding finds any user by id; the team check is what

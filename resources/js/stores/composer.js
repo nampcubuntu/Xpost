@@ -44,6 +44,8 @@ export const useComposerStore = defineStore('composer', {
         media: [],
         options: null,
         measure: { weighted_length: 0, remaining: 280, max: 280, permutations: 1 },
+        // Real posts this template produces, not a count of them.
+        samples: [],
         estimate: null,
         errors: {},
         saving: false,
@@ -97,6 +99,35 @@ export const useComposerStore = defineStore('composer', {
             });
 
             this.measure = data;
+        },
+
+        /**
+         * A few of the posts this template will actually produce.
+         *
+         * The permutation count alone says nothing useful: "1,024 variants" is
+         * a number, and nobody turns a feature on for a number. Five real posts
+         * side by side is what shows whether the spin reads naturally or
+         * produces nonsense -- and reading them is the only way to catch a
+         * bracket in the wrong place before a thousand accounts publish it.
+         */
+        async refreshSamples() {
+            if (!this.usesSpintax) {
+                this.samples = [];
+
+                return;
+            }
+
+            try {
+                const { data } = await api.post('composer/samples', {
+                    body: this.post.body,
+                    count: 5,
+                });
+
+                this.samples = data.samples;
+            } catch {
+                // Cosmetic: a failed preview must not block composing.
+                this.samples = [];
+            }
         },
 
         async refreshEstimate() {

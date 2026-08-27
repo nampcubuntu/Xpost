@@ -28,6 +28,15 @@ const mediaPickerOpen = ref(false);
 
 const post = computed(() => composer.post);
 
+/**
+ * How many accounts this post is heading for.
+ *
+ * Used to decide whether identical text is worth warning about: two accounts
+ * posting the same sentence is normal, two thousand is the signal every
+ * platform looks for.
+ */
+const estimatedAccounts = computed(() => composer.estimate?.accounts ?? 0);
+
 const counterClass = computed(() => {
     if (composer.measure.remaining < 0) return 'text-red-600 font-semibold';
     if (composer.measure.remaining <= 20) return 'text-amber-600';
@@ -67,7 +76,12 @@ watch(
     () => [post.value.body, post.value.website_url, post.value.destination_type],
     () => {
         clearTimeout(measureTimer);
-        measureTimer = setTimeout(() => composer.refreshMeasure(), 250);
+        measureTimer = setTimeout(async () => {
+            await composer.refreshMeasure();
+            // Samples depend on the permutation count the measure just
+            // returned, so they follow it rather than racing it.
+            await composer.refreshSamples();
+        }, 250);
     },
 );
 
@@ -302,6 +316,44 @@ function uploadedOn(item) {
                     <p v-if="fieldError('body')" class="mt-1 text-[11.5px] text-red-600">{{ fieldError('body') }}</p>
                     <p v-else-if="composer.usesSpintax" class="mt-1 text-[11.5px] text-neutral-500">
                         Spintax đang bật — {{ composer.measure.permutations.toLocaleString('vi-VN') }} biến thể nội dung.
+                    </p>
+
+                    <!--
+                        A count is a number, and nobody turns a feature on for a
+                        number. Real posts side by side are what show whether the
+                        spin reads naturally, and are the only way to catch a
+                        bracket in the wrong place before a thousand accounts
+                        publish it.
+                    -->
+                    <div v-if="composer.samples.length > 1" class="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-2.5">
+                        <p class="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-neutral-500">
+                            Ví dụ tài khoản sẽ đăng
+                        </p>
+                        <ul class="space-y-1">
+                            <li
+                                v-for="(sample, index) in composer.samples"
+                                :key="index"
+                                class="truncate text-[12px] text-neutral-700"
+                                :title="sample"
+                            >
+                                <span class="mr-1.5 text-neutral-400">{{ index + 1 }}.</span>{{ sample }}
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!--
+                        Identical text across a large audience is the strongest
+                        signal a platform looks for, and the default is `same`
+                        -- so the nudge appears where the text is written, not
+                        buried next to the strategy dropdown.
+                    -->
+                    <p
+                        v-else-if="!composer.usesSpintax && post.body && estimatedAccounts > 20"
+                        class="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11.5px] text-amber-900"
+                    >
+                        {{ estimatedAccounts.toLocaleString('vi-VN') }} tài khoản sẽ đăng nội dung
+                        <strong>giống hệt nhau</strong>. Dùng <code class="font-mono">{'{'}xin chào|chào bạn{'}'}</code>
+                        để mỗi tài khoản một biến thể.
                     </p>
                 </div>
 

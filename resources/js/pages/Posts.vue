@@ -42,6 +42,15 @@ const badgeClass = {
 /** How many filters are narrowing the list, for the badge on the button. */
 const activeFilters = computed(() => [status.value, type.value, search.value].filter(Boolean).length);
 
+/**
+ * The scheduler is a separate process from the queue workers, and when it
+ * stops, everything else stays up and healthy while no post is ever
+ * dispatched. The only symptom is scheduled posts sitting at 0/N, which says
+ * nothing about the cause -- so say it here, where they are looked at.
+ */
+const schedulerLastRunAt = ref(null);
+const schedulerDown = computed(() => schedulerLastRunAt.value === null);
+
 async function load() {
     loading.value = true;
 
@@ -57,6 +66,8 @@ async function load() {
 
         posts.value = data.data;
         meta.value = data.meta;
+        // Absent means the scheduler has not run in the last few minutes.
+        schedulerLastRunAt.value = data.scheduler_last_run_at ?? null;
     } finally {
         loading.value = false;
     }
@@ -144,6 +155,24 @@ const destinationHost = (url) => {
                 <NavIcon name="composer" :size="14" />
                 Soạn bài mới
             </RouterLink>
+        </div>
+
+        <!--
+            Without this the failure is invisible: posts stay at "Đã lên lịch
+            0/N" and every other part of the stack reports healthy.
+        -->
+        <div
+            v-if="schedulerDown"
+            class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"
+        >
+            <strong class="font-semibold">Scheduler không chạy.</strong>
+            Bài đã tới giờ sẽ nằm ở “Đã lên lịch” và không bao giờ đăng. Horizon chạy
+            job trong hàng đợi, nhưng lệnh đẩy bài vào hàng đợi nằm ở scheduler —
+            hai tiến trình khác nhau.
+            <span class="mt-1 block">
+                Chạy <code class="rounded bg-amber-100 px-1 py-0.5 font-mono">php artisan schedule:work</code>,
+                hoặc mở lại bằng <code class="rounded bg-amber-100 px-1 py-0.5 font-mono">dev.bat</code>.
+            </span>
         </div>
 
         <!-- Toolbar -->

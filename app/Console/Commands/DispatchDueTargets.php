@@ -11,6 +11,7 @@ use App\Models\Post;
 use App\Models\PostTarget;
 use App\Support\TeamContext;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -29,6 +30,9 @@ use Illuminate\Support\Facades\DB;
  */
 class DispatchDueTargets extends Command
 {
+    /** Outlives one run by enough minutes to survive a slow tick, not an outage. */
+    private const HEARTBEAT_KEY = 'xpost:scheduler:last-run';
+
     protected $signature = 'xpost:dispatch
                             {--limit=1000 : Maximum targets to claim in this run}
                             {--chunk=200 : Rows claimed per transaction}
@@ -62,9 +66,43 @@ class DispatchDueTargets extends Command
 
         $this->promotePublishingPosts();
 
+        $this->heartbeat();
+
         $this->components->info("Dispatched {$dispatched} target(s).");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Leave a mark saying the scheduler is alive.
+     *
+     * Nothing else in the system notices when it is not. The scheduler is a
+     * separate process from Horizon, and when it stops -- a closed window, a
+     * host reboot -- every queue worker stays up and healthy while no post is
+     * ever dispatched. Posts pile up in `pending` and the only symptom is that
+     * nothing happens, which is a long way from the cause.
+     *
+     * The TTL is what makes this useful: the key simply stops existing a few
+     * minutes after the last run, so a reader checks for presence rather than
+     * comparing timestamps and deciding what counts as stale.
+     */
+    private function heartbeat(): void
+    {
+        try {
+            Cache::put(self::HEARTBEAT_KEY, now()->toIso8601String(), now()->addMinutes(5));
+        } catch (\Throwable) {
+            // A dead cache is its own alarm; it must not stop the dispatch.
+        }
+    }
+
+    /** The last time the scheduler ran, or null when it has not run recently. */
+    public static function lastRunAt(): ?string
+    {
+        try {
+            return Cache::get(self::HEARTBEAT_KEY);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**

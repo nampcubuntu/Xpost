@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Console\Commands\DispatchDueTargets;
 use App\Enums\PostStatus;
 use App\Enums\TargetStatus;
 use App\Http\Controllers\Controller;
@@ -45,7 +46,15 @@ class PostController extends Controller
             ->paginate(min((int) $request->query('per_page', 25), 100))
             ->withQueryString();
 
-        return PostResource::collection($posts);
+        /*
+         * Whether the scheduler is alive, alongside the posts it is meant to be
+         * publishing. It runs as a separate process from Horizon, so it can
+         * stop while every queue worker stays up and healthy -- and then posts
+         * simply sit in `pending` with nothing anywhere saying why. This page is
+         * where that is noticed, so this is where the answer belongs.
+         */
+        return PostResource::collection($posts)
+            ->additional(['scheduler_last_run_at' => DispatchDueTargets::lastRunAt()]);
     }
 
     public function store(StorePostRequest $request): JsonResponse

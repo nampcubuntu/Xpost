@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import api from '../lib/api';
 import NavIcon from '../components/NavIcon.vue';
 
@@ -50,6 +50,69 @@ const activeFilters = computed(() => [status.value, type.value, search.value].fi
  */
 const schedulerLastRunAt = ref(null);
 const schedulerDown = computed(() => schedulerLastRunAt.value === null);
+
+const menuFor = ref(null);
+const busy = ref(null);
+const flash = ref(null);
+
+/** Only work that has not gone out yet can be called back. */
+const canCancel = (post) => ['scheduled', 'publishing', 'draft'].includes(post.status);
+
+/** Matches PostStatus::isEditable() -- the API refuses anything further along. */
+const canEdit = (post) => ['draft', 'scheduled'].includes(post.status);
+
+/** Close the open row menu on any click that is not inside it. */
+function closeMenus() {
+    menuFor.value = null;
+}
+
+onMounted(() => document.addEventListener('click', closeMenus));
+onUnmounted(() => document.removeEventListener('click', closeMenus));
+
+async function act(post, request, describe) {
+    busy.value = post.id;
+
+    try {
+        flash.value = { type: 'ok', message: describe(await request()) };
+        await load();
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không thực hiện được.' };
+    } finally {
+        busy.value = null;
+        menuFor.value = null;
+    }
+}
+
+function retryFailed(post) {
+    // The targets go back to pending; the scheduler picks them up on its next
+    // pass rather than anything being published from here.
+    act(post, () => api.post(`posts/${post.id}/retry-failed`),
+        ({ data }) => `Đã đưa ${data.requeued} bài lỗi vào hàng đợi.`);
+}
+
+function cancelPost(post) {
+    act(post, () => api.post(`posts/${post.id}/cancel`),
+        ({ data }) => `Đã huỷ ${data.cancelled} bài chưa gửi.`);
+}
+
+function destroyPost(post) {
+    /*
+     * Confirmed because it cannot be undone here and, for anything already
+     * published, does not undo what is on X either -- the row goes, the tweets
+     * stay. The menu says so; this is the last chance to read it.
+     */
+    const published = post.progress?.published ?? 0;
+
+    const warning = published
+        ? `\n\n${published} bài đã đăng lên X sẽ KHÔNG bị xoá khỏi X.`
+        : '';
+
+    if (! window.confirm(`Xoá "${post.name || 'bài này'}" khỏi Xpost?${warning}`)) {
+        return;
+    }
+
+    act(post, () => api.delete(`posts/${post.id}`), () => 'Đã xoá bài.');
+}
 
 async function load() {
     loading.value = true;
@@ -189,6 +252,17 @@ const destinationHost = (url) => {
             0/N" and every other part of the stack reports healthy.
         -->
         <div
+            v-if="flash"
+            class="mb-4 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-[13px]"
+            :class="flash.type === 'error'
+                ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-green-200 bg-green-50 text-green-800'"
+        >
+            <span>{{ flash.message }}</span>
+            <button class="text-current opacity-60 hover:opacity-100" @click="flash = null">✕</button>
+        </div>
+
+        <div
             v-if="schedulerDown"
             class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"
         >
@@ -244,16 +318,17 @@ const destinationHost = (url) => {
                             <th class="px-4 py-3 font-normal">Đích đến</th>
                             <th class="px-4 py-3 font-normal">Trạng thái</th>
                             <th class="px-4 py-3 font-normal">Thời điểm</th>
+                            <th class="w-12 px-4 py-3"><span class="sr-only">Thao tác</span></th>
                         </tr>
                     </thead>
 
                     <tbody class="divide-y divide-neutral-100">
                         <tr v-if="loading">
-                            <td colspan="6" class="px-4 py-10 text-center text-neutral-500">Đang tải…</td>
+                            <td colspan="7" class="px-4 py-10 text-center text-neutral-500">Đang tải…</td>
                         </tr>
 
                         <tr v-else-if="!posts.length">
-                            <td colspan="6" class="px-4 py-10 text-center text-neutral-500">Chưa có bài đăng nào.</td>
+                            <td colspan="7" class="px-4 py-10 text-center text-neutral-500">Chưa có bài đăng nào.</td>
                         </tr>
 
                         <tr v-for="post in posts" :key="post.id" class="align-top hover:bg-neutral-50">
@@ -415,6 +490,91 @@ const destinationHost = (url) => {
                                     <p class="text-neutral-400">{{ time(rowDate(post)) }}</p>
                                 </template>
                                 <span v-else class="text-neutral-400">—</span>
+                            </td>
+
+                            <!--
+                                Everything here already existed on the API and had
+                                no way to be reached: a failed post could not be
+                                retried and a finished one could not be cleared.
+                            -->
+                            <td class="relative px-4 py-4 text-right">
+                                <button
+                                    class="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                                    :aria-expanded="menuFor === post.id"
+                                    aria-haspopup="menu"
+                                    @click.stop="menuFor = menuFor === post.id ? null : post.id"
+                                >
+                                    <svg viewBox="0 0 16 16" class="h-4 w-4 fill-current">
+                                        <circle cx="8" cy="3" r="1.4" />
+                                        <circle cx="8" cy="8" r="1.4" />
+                                        <circle cx="8" cy="13" r="1.4" />
+                                    </svg>
+                                </button>
+
+                                <div
+                                    v-if="menuFor === post.id"
+                                    class="absolute right-4 top-12 z-20 w-56 overflow-hidden rounded-lg border border-neutral-200 bg-white py-1 text-left shadow-lg"
+                                    role="menu"
+                                    @click.stop
+                                >
+                                    <button
+                                        v-if="post.progress?.failed"
+                                        class="block w-full px-3 py-2 text-[13px] hover:bg-neutral-50 disabled:opacity-50"
+                                        :disabled="busy === post.id"
+                                        role="menuitem"
+                                        @click="retryFailed(post)"
+                                    >
+                                        Đăng lại {{ post.progress.failed }} bài lỗi
+                                    </button>
+
+                                    <button
+                                        v-if="canCancel(post)"
+                                        class="block w-full px-3 py-2 text-[13px] hover:bg-neutral-50 disabled:opacity-50"
+                                        :disabled="busy === post.id"
+                                        role="menuitem"
+                                        @click="cancelPost(post)"
+                                    >
+                                        Huỷ những bài chưa gửi
+                                    </button>
+
+                                    <!--
+                                        Only a draft or a scheduled post can be
+                                        edited -- once it has started going out,
+                                        changing it would mean two versions of the
+                                        same campaign on different accounts.
+                                    -->
+                                    <RouterLink
+                                        v-if="canEdit(post)"
+                                        :to="{ name: 'composer.edit', params: { id: String(post.id) } }"
+                                        class="block w-full px-3 py-2 text-[13px] hover:bg-neutral-50"
+                                        role="menuitem"
+                                    >
+                                        Sửa bài
+                                    </RouterLink>
+
+                                    <div class="my-1 border-t border-neutral-100"></div>
+
+                                    <button
+                                        class="block w-full px-3 py-2 text-left text-[13px] text-red-600 hover:bg-red-50 disabled:opacity-50"
+                                        :disabled="busy === post.id"
+                                        role="menuitem"
+                                        @click="destroyPost(post)"
+                                    >
+                                        Xoá khỏi Xpost
+                                    </button>
+
+                                    <!--
+                                        Deleting here does not reach X. Saying so in
+                                        the menu is cheaper than letting someone find
+                                        out from their own timeline.
+                                    -->
+                                    <p
+                                        v-if="post.progress?.published"
+                                        class="px-3 pb-2 pt-1 text-[11px] leading-snug text-neutral-500"
+                                    >
+                                        {{ post.progress.published }} bài đã lên X sẽ vẫn còn trên đó.
+                                    </p>
+                                </div>
                             </td>
                         </tr>
                     </tbody>

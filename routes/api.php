@@ -101,6 +101,16 @@ Route::prefix('v1')->group(function (): void {
             Route::post('links/bulk', [LinkController::class, 'bulk']);
             Route::delete('links', [LinkController::class, 'destroy']);
 
+            /*
+             * The hosts a code can be served from. Xpost's own data, not
+             * Cloudflare's: every domain routing to the same Worker resolves
+             * every code, so this is a choice, not a property of a key.
+             */
+            Route::get('link-domains', [LinkController::class, 'domains']);
+            Route::post('link-domains', [LinkController::class, 'storeDomain']);
+            Route::put('link-domains/{domain}', [LinkController::class, 'updateDomain']);
+            Route::delete('link-domains/{domain}', [LinkController::class, 'destroyDomain']);
+
             Route::apiResource('proxies', ProxyController::class)->except(['show']);
             Route::post('proxies/{proxy}/check', [ProxyController::class, 'check']);
 

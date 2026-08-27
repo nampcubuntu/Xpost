@@ -15,7 +15,6 @@ import NavIcon from '../components/NavIcon.vue';
 const rows = ref([]);
 const cursor = ref(null);
 const pages = ref([]);        // cursors already visited, so Back works
-const baseUrl = ref('');
 const loading = ref(true);
 const busy = ref(false);
 const flash = ref(null);
@@ -27,10 +26,89 @@ const newValue = ref('');
 const bulkText = ref('');
 const showBulk = ref(false);
 
-const shortUrl = (key) => (baseUrl.value
-    // The Worker is reached by the code, not by the key it is stored under.
-    ? `${baseUrl.value}/${key.replace(/^[^:]*:/, '')}`
+/*
+ * Which host to show a code under.
+ *
+ * Every domain routes to the same Worker over the same namespace, so any code
+ * resolves on all of them -- this only decides what gets copied, and switching
+ * it rewrites every row at once.
+ */
+const domains = ref([]);
+const viewDomain = ref(null);
+const newDomain = ref('');
+const showDomains = ref(false);
+
+const activeDomains = computed(() => domains.value.filter((d) => d.is_active));
+
+const currentHost = computed(() => activeDomains.value.find((d) => d.id === viewDomain.value)
+    ?? activeDomains.value.find((d) => d.is_default)
+    ?? activeDomains.value[0]
+    ?? null);
+
+// Keys carry a prefix so one namespace can hold more than one kind of entry;
+// the Worker is reached by the code alone.
+const codeOf = (key) => (key.includes(':') ? key.slice(key.lastIndexOf(':') + 1) : key);
+
+const shortUrl = (key) => (currentHost.value
+    ? `https://${currentHost.value.host}/${codeOf(key)}`
     : null);
+
+async function addDomain() {
+    const host = newDomain.value.trim();
+
+    if (!host) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        const { data } = await api.post('link-domains', { host });
+        domains.value = [...domains.value, data.data];
+        newDomain.value = '';
+        flash.value = { type: 'ok', message: `Đã thêm ${data.data.host}.` };
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không thêm được.' };
+    } finally {
+        busy.value = false;
+    }
+}
+
+async function updateDomain(domain, changes) {
+    busy.value = true;
+
+    try {
+        await api.put(`link-domains/${domain.id}`, changes);
+        const { data } = await api.get('link-domains');
+        domains.value = data.data;
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không lưu được.' };
+    } finally {
+        busy.value = false;
+    }
+}
+
+async function removeDomain(domain) {
+    if (!window.confirm(`Xoá ${domain.host}?\n\nLink đã đăng dùng domain này vẫn hoạt động — Cloudflare mới là nơi định tuyến.`)) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        await api.delete(`link-domains/${domain.id}`);
+        const { data } = await api.get('link-domains');
+        domains.value = data.data;
+
+        if (viewDomain.value === domain.id) {
+            viewDomain.value = null;
+        }
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không xoá được.' };
+    } finally {
+        busy.value = false;
+    }
+}
 
 const bulkCount = computed(() => bulkText.value
     .split('\n')
@@ -47,7 +125,7 @@ async function load(nextCursor = null) {
 
         rows.value = data.data;
         cursor.value = data.cursor;
-        baseUrl.value = data.base_url ?? '';
+        domains.value = data.domains ?? [];
         configured.value = true;
     } catch (error) {
         configured.value = error.response?.data?.configured !== false;
@@ -182,9 +260,25 @@ onMounted(load);
                 </p>
             </div>
 
-            <button class="xp-btn-ghost" @click="showBulk = !showBulk">
-                {{ showBulk ? 'Đóng nhập hàng loạt' : 'Nhập hàng loạt' }}
-            </button>
+            <div class="flex flex-wrap items-center gap-2">
+                <!--
+                    Every domain resolves every code, so this only decides what
+                    gets copied -- switching it rewrites every row at once.
+                -->
+                <select v-if="activeDomains.length > 1" v-model="viewDomain" class="xp-field max-w-[220px] py-2 text-[13px]">
+                    <option :value="null">Domain mặc định</option>
+                    <option v-for="domain in activeDomains" :key="domain.id" :value="domain.id">
+                        {{ domain.host }}
+                    </option>
+                </select>
+
+                <button class="xp-btn-ghost" @click="showDomains = !showDomains">
+                    Domain ({{ activeDomains.length }})
+                </button>
+                <button class="xp-btn-ghost" @click="showBulk = !showBulk">
+                    {{ showBulk ? 'Đóng nhập hàng loạt' : 'Nhập hàng loạt' }}
+                </button>
+            </div>
         </div>
 
         <div
@@ -211,12 +305,60 @@ onMounted(load);
             <code class="mt-1 block font-mono text-xs">
                 CLOUDFLARE_ACCOUNT_ID=<br>
                 CLOUDFLARE_KV_NAMESPACE_ID=<br>
-                CLOUDFLARE_API_TOKEN=<br>
-                XPOST_LINK_BASE_URL=https://…
+                CLOUDFLARE_API_TOKEN=
             </code>
             <p class="mt-1 text-xs">
                 Token chỉ cần đúng một quyền: <strong>Workers KV Storage: Edit</strong>. Đừng dùng Global API Key.
+                Domain thì quản lý ngay trên trang này, không cần đặt trong <code class="font-mono">.env</code>.
             </p>
+        </div>
+
+        <!-- Domains -->
+        <div v-if="showDomains" class="xp-card mb-4 p-4">
+            <p class="mb-1 text-[13px] font-medium">Domain phục vụ short link</p>
+            <p class="mb-3 text-xs text-neutral-500">
+                Mọi domain trỏ về cùng một Worker đều phân giải được mọi mã — nên đây là lựa chọn
+                lúc dùng link, không phải thuộc tính của key. Xoá domain ở đây không tắt nó trên
+                Cloudflare.
+            </p>
+
+            <ul class="mb-3 divide-y divide-neutral-100 rounded-md border border-neutral-200">
+                <li v-if="!domains.length" class="px-3 py-2 text-[13px] text-neutral-500">
+                    Chưa có domain nào — thêm một cái để dựng được short URL.
+                </li>
+                <li v-for="domain in domains" :key="domain.id" class="flex items-center gap-3 px-3 py-2">
+                    <span class="flex-1 font-mono text-[13px]" :class="domain.is_active ? '' : 'text-neutral-400 line-through'">
+                        {{ domain.host }}
+                    </span>
+                    <span v-if="domain.label" class="text-xs text-neutral-500">{{ domain.label }}</span>
+
+                    <span v-if="domain.is_default" class="rounded bg-neutral-900 px-1.5 py-0.5 text-[11px] text-white">
+                        mặc định
+                    </span>
+                    <button
+                        v-else
+                        class="text-[12px] text-blue-600 hover:underline"
+                        :disabled="busy"
+                        @click="updateDomain(domain, { is_default: true })"
+                    >Đặt mặc định</button>
+
+                    <button
+                        class="text-[12px] text-neutral-600 hover:underline"
+                        :disabled="busy"
+                        @click="updateDomain(domain, { is_active: !domain.is_active })"
+                    >{{ domain.is_active ? 'Tắt' : 'Bật' }}</button>
+
+                    <button class="text-[12px] text-red-600 hover:underline" :disabled="busy" @click="removeDomain(domain)">
+                        Xoá
+                    </button>
+                </li>
+            </ul>
+
+            <form class="flex flex-wrap gap-2" @submit.prevent="addDomain">
+                <input v-model="newDomain" class="xp-field max-w-xs font-mono text-[13px]" placeholder="link.zenomedia.co">
+                <button class="xp-btn-primary" :disabled="busy || !newDomain.trim()">Thêm domain</button>
+                <span class="self-center text-xs text-neutral-500">Dán cả URL cũng được — chỉ phần host được giữ.</span>
+            </form>
         </div>
 
         <!-- Bulk -->

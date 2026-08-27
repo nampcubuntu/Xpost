@@ -55,9 +55,97 @@ class LinkStoreTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.key', 'r:abc')
             ->assertJsonPath('data.0.value', 'https://img/1|https://dest/')
-            ->assertJsonPath('base_url', 'https://l.example.com')
             // An empty string is Cloudflare's last page, not a cursor.
             ->assertJsonPath('cursor', null);
+    }
+
+    #[Test]
+    public function the_old_single_domain_setting_seeds_the_first_row(): void
+    {
+        // An install that already had XPOST_LINK_BASE_URL keeps working without
+        // anyone re-entering it.
+        Http::fake(['api.cloudflare.com/*' => Http::response([
+            'success' => true, 'result' => [], 'result_info' => ['cursor' => ''],
+        ])]);
+
+        $this->actingAs($this->user)
+            ->getJson('/api/v1/links')
+            ->assertOk()
+            ->assertJsonPath('domains.0.host', 'l.example.com')
+            ->assertJsonPath('domains.0.is_default', true);
+    }
+
+    #[Test]
+    public function a_domain_is_reduced_to_its_host(): void
+    {
+        /*
+         * People paste what they have. Two rows for the same domain differing
+         * by a scheme or a trailing slash look identical on screen and defeat
+         * the unique index.
+         */
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/link-domains', ['host' => 'https://Link.Example.com/abc'])
+            ->assertCreated()
+            ->assertJsonPath('data.host', 'link.example.com');
+    }
+
+    #[Test]
+    public function the_first_domain_is_the_default_whether_or_not_it_was_asked_for(): void
+    {
+        // A list with entries and no default has nothing to build a URL from.
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/link-domains', ['host' => 'a.example.com'])
+            ->assertCreated()
+            ->assertJsonPath('data.is_default', true);
+    }
+
+    #[Test]
+    public function only_one_domain_is_ever_the_default(): void
+    {
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'a.example.com']);
+        $second = $this->actingAs($this->user)
+            ->postJson('/api/v1/link-domains', ['host' => 'b.example.com', 'is_default' => true])
+            ->json('data.id');
+
+        $domains = $this->actingAs($this->user)->getJson('/api/v1/link-domains')->json('data');
+
+        $this->assertSame([$second], collect($domains)->where('is_default', true)->pluck('id')->all());
+    }
+
+    #[Test]
+    public function deleting_the_default_promotes_another(): void
+    {
+        // Every short URL is built from the default; a list with none silently
+        // stops producing links.
+        $first = $this->actingAs($this->user)
+            ->postJson('/api/v1/link-domains', ['host' => 'a.example.com'])->json('data.id');
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'b.example.com']);
+
+        $this->actingAs($this->user)->deleteJson("/api/v1/link-domains/{$first}")->assertNoContent();
+
+        $this->assertSame(
+            'b.example.com',
+            $this->actingAs($this->user)->getJson('/api/v1/link-domains')->json('data.0.host'),
+        );
+        $this->assertTrue($this->actingAs($this->user)->getJson('/api/v1/link-domains')->json('data.0.is_default'));
+    }
+
+    #[Test]
+    public function the_same_domain_cannot_be_added_twice(): void
+    {
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'a.example.com']);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/link-domains', ['host' => 'https://a.example.com/'])
+            ->assertStatus(422);
+    }
+
+    #[Test]
+    public function something_that_is_not_a_domain_is_refused(): void
+    {
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/link-domains', ['host' => 'localhost'])
+            ->assertStatus(422);
     }
 
     #[Test]

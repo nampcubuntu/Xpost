@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
+use App\Models\LinkDomain;
 use App\Services\Links\CloudflareKvClient;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -64,8 +65,107 @@ class LinkController extends Controller
         return response()->json([
             'data' => $rows,
             'cursor' => $page['cursor'],
-            'base_url' => config('xpost.links.base_url'),
+            'domains' => $this->domainList(),
         ]);
+    }
+
+    /**
+     * The hosts a code can be served from.
+     *
+     * Any of them resolves any code: they route to the same Worker over the
+     * same namespace, so the domain is a choice made when a link is used
+     * rather than something stored against the key.
+     */
+    public function domains(): JsonResponse
+    {
+        return response()->json(['data' => $this->domainList()]);
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function domainList(): array
+    {
+        /*
+         * Seed the first row from the old single-value setting, so an install
+         * that already had one keeps working without anyone re-entering it.
+         */
+        if (! LinkDomain::query()->exists() && filled($seed = config('xpost.links.base_url'))) {
+            LinkDomain::create([
+                'host' => LinkDomain::normaliseHost($seed),
+                'label' => 'từ XPOST_LINK_BASE_URL',
+                'is_default' => true,
+            ]);
+        }
+
+        return LinkDomain::query()
+            ->orderByDesc('is_default')
+            ->orderBy('host')
+            ->get(['id', 'host', 'label', 'is_default', 'is_active'])
+            ->toArray();
+    }
+
+    public function storeDomain(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'host' => ['required', 'string', 'max:253'],
+            'label' => ['nullable', 'string', 'max:100'],
+            'is_default' => ['boolean'],
+        ]);
+
+        $host = LinkDomain::normaliseHost($data['host']);
+
+        if ($host === '' || ! str_contains($host, '.')) {
+            return response()->json(['message' => 'Domain không hợp lệ.'], 422);
+        }
+
+        if (LinkDomain::query()->where('host', $host)->exists()) {
+            return response()->json(['message' => "Domain {$host} đã có."], 422);
+        }
+
+        // The first one is the default whether or not it was asked for --
+        // otherwise the list has entries and nothing to build a URL from.
+        $isDefault = ($data['is_default'] ?? false) || ! LinkDomain::query()->exists();
+
+        $domain = LinkDomain::create([
+            'host' => $host,
+            'label' => $data['label'] ?? null,
+            'is_default' => $isDefault,
+        ]);
+
+        if ($isDefault) {
+            LinkDomain::query()->whereKeyNot($domain->id)->update(['is_default' => false]);
+        }
+
+        return response()->json(['data' => $domain], 201);
+    }
+
+    public function updateDomain(Request $request, LinkDomain $domain): JsonResponse
+    {
+        $data = $request->validate([
+            'is_default' => ['boolean'],
+            'is_active' => ['boolean'],
+            'label' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $domain->fill($data)->save();
+
+        if ($data['is_default'] ?? false) {
+            LinkDomain::query()->whereKeyNot($domain->id)->update(['is_default' => false]);
+        }
+
+        return response()->json(['data' => $domain->fresh()]);
+    }
+
+    public function destroyDomain(LinkDomain $domain): JsonResponse
+    {
+        $domain->delete();
+
+        // Never leave the list without a default: every short URL is built
+        // from one, and a list with none silently stops producing links.
+        if ($domain->is_default && ($next = LinkDomain::query()->orderBy('host')->first())) {
+            $next->forceFill(['is_default' => true])->save();
+        }
+
+        return response()->json(status: 204);
     }
 
     public function store(Request $request): JsonResponse

@@ -32,6 +32,30 @@ const isVideo = (item) => (item.mime ?? '').startsWith('video/');
  */
 const poster = (item) => `${item.url}#t=0.1`;
 
+/*
+ * One item shows its own shape; several share a grid.
+ *
+ * Every tile was forced to 16:9 and cropped to fit, so a 9:16 clip -- the shape
+ * most of this library is in -- previewed as a letterboxed strip of its middle.
+ * The preview exists to answer "is this the right framing", and it was
+ * answering about a framing X would never show.
+ *
+ * Clamped at both ends, because X does not hand the whole timeline to a very
+ * tall clip either, and a panorama at 3:1 would leave the card a hairline.
+ */
+const MIN_RATIO = 9 / 16;
+const MAX_RATIO = 2;
+
+function mediaStyle(item) {
+    // A grid of two or four has to crop: the cells are equal, so the shapes
+    // cannot be. That is what X does with them too.
+    if (props.media.length !== 1 || !item.width || !item.height) {
+        return { aspectRatio: '16 / 9' };
+    }
+
+    return { aspectRatio: `${Math.min(Math.max(item.width / item.height, MIN_RATIO), MAX_RATIO)}` };
+}
+
 const host = computed(() => {
     if (!props.websiteUrl) {
         return '';
@@ -152,13 +176,15 @@ const actions = [
                                                 preload="metadata"
                                                 muted
                                                 playsinline
-                                                class="aspect-video w-full bg-neutral-100 object-cover"
+                                                class="w-full bg-neutral-100 object-cover"
+                                                :style="mediaStyle(item)"
                                             ></video>
                                             <img
                                                 v-else
                                                 :src="item.url"
                                                 alt=""
-                                                class="aspect-video w-full bg-neutral-100 object-cover"
+                                                class="w-full bg-neutral-100 object-cover"
+                                                :style="mediaStyle(item)"
                                             >
 
                                             <!-- Play affordance -->

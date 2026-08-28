@@ -261,38 +261,17 @@ function toggle(item) {
     chosen.value = next;
 }
 
-/*
- * What is going up, and how far along.
- *
- * A spinner says only that something is happening, which is enough for a photo
- * and not for a 40MB clip going out through a tunnel: for a minute or so it is
- * indistinguishable from a hang, and the reasonable thing to do about a hang is
- * to click again.
- */
-const progress = ref(null);
-
 async function upload(files) {
     error.value = null;
     uploading.value = true;
 
-    const queue = Array.from(files ?? []);
-
     try {
-        for (const [index, file] of queue.entries()) {
+        for (const file of Array.from(files ?? [])) {
             const form = new FormData();
             form.append('file', file);
 
-            progress.value = { name: file.name, percent: 0, index: index + 1, total: queue.length };
-
             const { data } = await api.post('media', form, {
                 headers: { 'Content-Type': 'multipart/form-data' },
-                onUploadProgress: (event) => {
-                    // total is absent when the size is not known up front; the
-                    // spinner alone is the honest answer then.
-                    if (progress.value && event.total) {
-                        progress.value.percent = Math.round((event.loaded / event.total) * 100);
-                    }
-                },
             });
 
             const media = data.data ?? data;
@@ -308,7 +287,6 @@ async function upload(files) {
         error.value = e.response?.data?.message ?? 'Tải tệp thất bại.';
     } finally {
         uploading.value = false;
-        progress.value = null;
     }
 }
 
@@ -402,30 +380,18 @@ function onDrop(event) {
                 @dragleave.prevent="dragging = false"
                 @drop.prevent="uploading || onDrop($event)"
             >
-                <!-- Uploading: a spinner in place of the icon, as the reference does -->
-                <template v-if="uploading">
-                    <svg class="animate-spin text-neutral-500" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <circle cx="12" cy="12" r="9.5" stroke="currentColor" stroke-width="2.2" opacity=".2" />
-                        <path d="M21.5 12A9.5 9.5 0 0 0 12 2.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                <!--
+                    The reference's uploading state, matched: a ring and the
+                    word, side by side on one line, and nothing else. No name,
+                    no count, no bar.
+                -->
+                <div v-if="uploading" class="flex items-center gap-2.5">
+                    <svg class="animate-spin text-neutral-400" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9.5" stroke="currentColor" stroke-width="2.6" opacity=".25" />
+                        <path d="M21.5 12A9.5 9.5 0 0 0 12 2.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" />
                     </svg>
-
-                    <p class="mt-2 max-w-[80%] truncate text-[12.5px] text-neutral-700">
-                        Đang tải lên {{ progress?.name }}
-                        <span v-if="progress?.total > 1" class="text-neutral-400">({{ progress.index }}/{{ progress.total }})</span>
-                    </p>
-
-                    <!--
-                        A bar, because the number alone jumps in a way that
-                        reads as stalling: the last few percent are the server
-                        writing the file, and nothing moves during them.
-                    -->
-                    <div class="mt-2 h-1 w-40 overflow-hidden rounded-full bg-neutral-200">
-                        <div
-                            class="h-full rounded-full bg-neutral-800 transition-[width] duration-200"
-                            :style="{ width: `${progress?.percent ?? 0}%` }"
-                        ></div>
-                    </div>
-                </template>
+                    <span class="text-[13px] text-neutral-500">Uploading...</span>
+                </div>
 
                 <template v-else>
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" class="text-neutral-500">

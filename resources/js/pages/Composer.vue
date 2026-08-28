@@ -26,6 +26,10 @@ const advancedOpen = ref(false);
 // reference's back-arrow flow instead of a modal.
 const mediaPickerOpen = ref(false);
 
+// What is ticked in the picker right now, which is not yet what the post
+// carries. The preview reads this while the picker is open.
+const pickerSelection = ref([]);
+
 const post = computed(() => composer.post);
 
 /**
@@ -257,6 +261,7 @@ function uploadedOn(item) {
                 :max="composer.options?.limits?.max_media_per_post ?? 4"
                 :destination-type="post.destination_type"
                 @close="mediaPickerOpen = false"
+                @select="pickerSelection = $event"
                 @confirm="composer.setMedia($event); mediaPickerOpen = false"
             />
 
@@ -596,12 +601,19 @@ function uploadedOn(item) {
                 </div>
             </div>
 
-            <!-- ─── Preview ─────────────────────────────────────────────── -->
+            <!--
+                ─── Preview ─────────────────────────────────────────────────
+
+                While the picker is open this follows the ticks rather than the
+                post. Deciding whether a clip works is the whole job of the
+                preview, and it cannot help with that if it only updates after
+                the choice has been committed.
+            -->
             <PhonePreview
                 :body="post.body"
                 :headline="post.headline"
                 :website-url="post.destination_type === 'website' ? post.website_url : ''"
-                :media="composer.media"
+                :media="mediaPickerOpen ? pickerSelection : composer.media"
                 :promoted-only="post.promoted_only"
             />
         </div>

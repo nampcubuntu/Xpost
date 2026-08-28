@@ -21,6 +21,17 @@ const renderedBody = computed(() =>
 /** Video needs a <video> element; an <img> pointed at an mp4 renders broken. */
 const isVideo = (item) => (item.mime ?? '').startsWith('video/');
 
+/*
+ * A frame, not just the metadata.
+ *
+ * preload="metadata" leaves a browser free to render nothing until play, so a
+ * clip that opens on a dark frame previews as a grey rectangle -- which reads
+ * as a broken upload rather than as the first frame. The fragment asks for a
+ * seek far enough in to decode one, and the request to the server is the same
+ * request.
+ */
+const poster = (item) => `${item.url}#t=0.1`;
+
 const host = computed(() => {
     if (!props.websiteUrl) {
         return '';
@@ -137,7 +148,7 @@ const actions = [
                                         >
                                             <video
                                                 v-if="isVideo(item)"
-                                                :src="item.url"
+                                                :src="poster(item)"
                                                 preload="metadata"
                                                 muted
                                                 playsinline

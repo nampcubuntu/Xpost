@@ -16,7 +16,7 @@ const props = defineProps({
     destinationType: { type: String, default: 'none' },
 });
 
-const emit = defineEmits(['close', 'confirm']);
+const emit = defineEmits(['close', 'confirm', 'select']);
 
 const items = ref([]);
 const loading = ref(true);
@@ -36,6 +36,18 @@ const videoEls = {};
 // Keyed by id so re-fetching (search, tab change) never drops a selection that
 // is currently filtered out of view.
 const chosen = ref(new Map(props.selected.map((m) => [m.id, m])));
+
+/*
+ * The live selection, not the confirmed one.
+ *
+ * The preview beside this panel was reading the media already attached to the
+ * post, so ticking a tile changed nothing until Xác nhận -- which is the wrong
+ * way round: the preview is how you decide whether to confirm.
+ *
+ * immediate, so the parent is in sync from the first render rather than from
+ * the first change.
+ */
+watch(chosen, (map) => emit('select', [...map.values()]), { immediate: true });
 
 const tabs = [
     { value: 'all', label: 'All' },

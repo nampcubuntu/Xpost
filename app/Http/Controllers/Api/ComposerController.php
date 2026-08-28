@@ -32,13 +32,14 @@ class ComposerController extends Controller
     public function options(): JsonResponse
     {
         return response()->json([
-            // offered(), not cases(): two of the five need X Premium on the
-            // posting account, and this pool has none.
             'reply_settings' => collect(ReplySettings::offered())
                 ->map(fn (ReplySettings $c) => [
                     'value' => $c->value,
                     'label' => $c->label(),
                     'icon' => $c->icon(),
+                    // Two of these need X Premium on the posting account. The
+                    // menu says so on the row rather than withholding them.
+                    'premium' => $c->requiresPremium(),
                 ]),
             'destination_types' => collect(DestinationType::cases())
                 ->map(fn (DestinationType $c) => ['value' => $c->value]),

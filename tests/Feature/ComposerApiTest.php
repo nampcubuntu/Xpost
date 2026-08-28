@@ -210,26 +210,32 @@ class ComposerApiTest extends TestCase
     }
 
     #[Test]
-    public function the_composer_offers_only_reply_settings_that_work_on_any_account(): void
+    public function the_composer_offers_every_reply_setting_and_flags_the_premium_ones(): void
     {
         /*
-         * All five are real API values -- the OpenAPI schema for POST /2/tweets
-         * lists following, mentionedUsers, subscribers and verified, with
-         * everyone sent by omitting the field. But subscribers and verified
-         * need X Premium on the posting account, and a post here fans out to a
-         * thousand of them: a setting that holds on some and is refused on
-         * others fails per account, hours later, inside a publish worker.
+         * All five, because all five are real API values: the OpenAPI schema
+         * for POST /2/tweets lists following, mentionedUsers, subscribers and
+         * verified, with everyone sent by omitting the field.
+         *
+         * Two of them need X Premium on the posting account. That is said on
+         * the row rather than settled by withholding the option -- a post fans
+         * out to a thousand accounts, so it is a decision worth making with the
+         * fact in hand.
          */
         $offered = collect($this->actingAs($this->user->refresh())
             ->getJson('/api/v1/composer/options')->assertOk()->json('reply_settings'));
 
         $this->assertSame(
-            ['everyone', 'following', 'mentionedUsers'],
+            ['everyone', 'following', 'mentionedUsers', 'subscribers', 'verified'],
             $offered->pluck('value')->all()
         );
 
         // Each carries the icon the menu draws, so the list reads at a glance.
-        $this->assertSame(['globe', 'members', 'at'], $offered->pluck('icon')->all());
+        $this->assertSame(['globe', 'members', 'at', 'members', 'badge'], $offered->pluck('icon')->all());
+
+        // And the two that need Premium are flagged, which is what lets the
+        // menu offer them without the constraint being a surprise.
+        $this->assertSame(['subscribers', 'verified'], $offered->where('premium', true)->pluck('value')->values()->all());
     }
 
     #[Test]

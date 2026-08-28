@@ -65,6 +65,8 @@ const paths = {
     // "Only people you mention" -- the one reply setting whose meaning is a
     // handle, so the icon is the character a handle starts with.
     at: 'M8 5.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2M10.6 5.4v3.9a1.7 1.7 0 0 0 3.4 0V8a6 6 0 1 0-4.3 5.8',
+    // A verified account, for the reply setting that only they can answer.
+    badge: 'M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12ZM5.4 8.2 7.1 9.9l3.5-3.8',
 };
 
 /**

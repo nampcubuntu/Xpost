@@ -22,24 +22,31 @@ enum ReplySettings: string
     }
 
     /**
-     * The ones the composer offers.
+     * The ones the composer offers: all of them.
      *
-     * All five are real: the OpenAPI schema for POST /2/tweets lists
+     * All five are real. The OpenAPI schema for POST /2/tweets lists
      * following, mentionedUsers, subscribers and verified, with everyone as
      * the default that is sent by omitting the field.
-     *
-     * Subscribers and verified are left out because they need X Premium on the
-     * posting account. A post here fans out to a thousand of them, so a
-     * setting that holds on some and is refused on others is worse than one
-     * that was never offered -- the failure arrives per account, hours later,
-     * inside a publish worker. X Ads Manager's own composer shows the same
-     * three, for what is presumably the same reason.
      *
      * @return list<self>
      */
     public static function offered(): array
     {
-        return [self::Everyone, self::Following, self::MentionedUsers];
+        return self::cases();
+    }
+
+    /**
+     * Needs X Premium on the posting account.
+     *
+     * Not a reason to withhold the option -- it is a reason to say so on the
+     * row. A post fans out to a thousand accounts, so choosing one of these
+     * against a pool with no Premium fails per account, hours later, inside a
+     * publish worker, against a post that looked fine when it was written. The
+     * label is what turns that into a decision instead of a surprise.
+     */
+    public function requiresPremium(): bool
+    {
+        return in_array($this, [self::Subscribers, self::Verified], true);
     }
 
     /** NavIcon name, so the menu reads at a glance the way the reference does. */
@@ -48,6 +55,7 @@ enum ReplySettings: string
         return match ($this) {
             self::Following, self::Subscribers => 'members',
             self::MentionedUsers => 'at',
+            self::Verified => 'badge',
             default => 'globe',
         };
     }

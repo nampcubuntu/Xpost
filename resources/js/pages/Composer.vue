@@ -360,7 +360,22 @@ function uploadedOn(item) {
                                     @click="post.reply_settings = option.value; replyMenuOpen = false"
                                 >
                                     <NavIcon :name="option.icon" :size="15" class="shrink-0 text-neutral-500" />
-                                    <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
+
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block truncate">{{ option.label }}</span>
+                                        <!--
+                                            Said on the row, not enforced by
+                                            hiding it. A post fans out to a
+                                            thousand accounts, so this is a
+                                            decision worth making with the fact
+                                            in hand rather than a surprise that
+                                            arrives per account, hours later.
+                                        -->
+                                        <span v-if="option.premium" class="block text-[11px] text-amber-600">
+                                            Cần X Premium trên tài khoản đăng
+                                        </span>
+                                    </span>
+
                                     <NavIcon
                                         v-if="post.reply_settings === option.value"
                                         name="check"

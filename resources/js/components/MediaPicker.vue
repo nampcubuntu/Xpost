@@ -304,12 +304,27 @@ function onDrop(event) {
                 Chưa có tệp nào. Kéo thả hoặc bấm vùng phía trên để tải lên.
             </p>
 
-            <div v-else class="grid items-start gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <!--
+                Capped and scrolled, packed into columns rather than rows.
+
+                A grid row is as tall as its tallest tile, and the tiles keep
+                the shape of their media on purpose -- so one 9:16 clip made
+                every 16:9 beside it sit in half a row of white space, and a
+                library of twenty ran off the bottom of the page. Columns pack
+                each tile under the one above it, which removes the gaps
+                without cropping anything square.
+
+                The order becomes column-major, which is the trade: newest
+                still lands top-left, and this is a wall of pictures being
+                scanned rather than a list being read.
+            -->
+            <div v-else class="-mr-2 max-h-[420px] overflow-y-auto pr-2">
+              <div class="columns-2 gap-3 lg:columns-3">
                 <button
                     v-for="item in items"
                     :key="item.id"
                     type="button"
-                    class="group relative overflow-hidden rounded-lg border-2 transition"
+                    class="group relative mb-3 block w-full break-inside-avoid overflow-hidden rounded-lg border-2 transition"
                     :style="ratioStyle(item)"
                     :class="[
                         chosen.has(item.id) ? 'border-neutral-900' : 'border-transparent',
@@ -359,6 +374,7 @@ function onDrop(event) {
                         >{{ ratioLabel(item) }}</span>
                     </span>
                 </button>
+              </div>
             </div>
         </div>
 

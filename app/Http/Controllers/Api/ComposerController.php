@@ -32,8 +32,14 @@ class ComposerController extends Controller
     public function options(): JsonResponse
     {
         return response()->json([
-            'reply_settings' => collect(ReplySettings::cases())
-                ->map(fn (ReplySettings $c) => ['value' => $c->value, 'label' => $c->label()]),
+            // offered(), not cases(): two of the five need X Premium on the
+            // posting account, and this pool has none.
+            'reply_settings' => collect(ReplySettings::offered())
+                ->map(fn (ReplySettings $c) => [
+                    'value' => $c->value,
+                    'label' => $c->label(),
+                    'icon' => $c->icon(),
+                ]),
             'destination_types' => collect(DestinationType::cases())
                 ->map(fn (DestinationType $c) => ['value' => $c->value]),
             'schedule_modes' => collect(ScheduleMode::cases())

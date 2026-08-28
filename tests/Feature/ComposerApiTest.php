@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Enums\PostStatus;
+use App\Enums\ReplySettings;
 use App\Jobs\FanOutPost;
 use App\Models\Post;
 use App\Models\XAccount;
@@ -206,5 +207,46 @@ class ComposerApiTest extends TestCase
     public function guests_are_rejected(): void
     {
         $this->getJson('/api/v1/posts')->assertUnauthorized();
+    }
+
+    #[Test]
+    public function the_composer_offers_only_reply_settings_that_work_on_any_account(): void
+    {
+        /*
+         * All five are real API values -- the OpenAPI schema for POST /2/tweets
+         * lists following, mentionedUsers, subscribers and verified, with
+         * everyone sent by omitting the field. But subscribers and verified
+         * need X Premium on the posting account, and a post here fans out to a
+         * thousand of them: a setting that holds on some and is refused on
+         * others fails per account, hours later, inside a publish worker.
+         */
+        $offered = collect($this->actingAs($this->user->refresh())
+            ->getJson('/api/v1/composer/options')->assertOk()->json('reply_settings'));
+
+        $this->assertSame(
+            ['everyone', 'following', 'mentionedUsers'],
+            $offered->pluck('value')->all()
+        );
+
+        // Each carries the icon the menu draws, so the list reads at a glance.
+        $this->assertSame(['globe', 'members', 'at'], $offered->pluck('icon')->all());
+    }
+
+    #[Test]
+    public function everyone_is_sent_by_leaving_the_field_out(): void
+    {
+        // Which is what the API asks for: "everyone" is not in its enum, it is
+        // the default you get by saying nothing.
+        $this->assertNull(ReplySettings::Everyone->toApiValue());
+        $this->assertSame('mentionedUsers', ReplySettings::MentionedUsers->toApiValue());
+    }
+
+    #[Test]
+    public function a_premium_only_setting_is_still_a_valid_stored_value(): void
+    {
+        // Dropped from the menu, not from the enum: a post saved before the
+        // menu changed must still load and still publish.
+        $this->assertNotNull(ReplySettings::tryFrom('subscribers'));
+        $this->assertSame('verified', ReplySettings::Verified->toApiValue());
     }
 }

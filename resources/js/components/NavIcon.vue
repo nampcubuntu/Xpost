@@ -62,6 +62,9 @@ const paths = {
     plus: 'M8 3.5v9M3.5 8h9',
     sparkle: 'M8 2.2 9.3 6 13 7.3 9.3 8.6 8 12.4 6.7 8.6 3 7.3 6.7 6 8 2.2Z',
     globe: 'M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12ZM2.4 8h11.2M8 2c1.5 1.7 2.3 3.8 2.3 6S9.5 12.3 8 14M8 2C6.5 3.7 5.7 5.8 5.7 8S6.5 12.3 8 14',
+    // "Only people you mention" -- the one reply setting whose meaning is a
+    // handle, so the icon is the character a handle starts with.
+    at: 'M8 5.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2M10.6 5.4v3.9a1.7 1.7 0 0 0 3.4 0V8a6 6 0 1 0-4.3 5.8',
 };
 
 /**

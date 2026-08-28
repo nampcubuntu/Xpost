@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useComposerStore } from '../stores/composer';
 import { useAuthStore } from '../stores/auth';
@@ -51,10 +51,26 @@ const counterClass = computed(() => {
     return 'text-neutral-500';
 });
 
-const replyLabel = computed(() =>
-    composer.options?.reply_settings?.find((o) => o.value === post.value.reply_settings)?.label
-    ?? 'Mọi người đều có thể trả lời',
+const replyOption = computed(() =>
+    composer.options?.reply_settings?.find((o) => o.value === post.value.reply_settings),
 );
+
+const replyLabel = computed(() => replyOption.value?.label ?? 'Mọi người đều có thể trả lời');
+
+/*
+ * Both menus close on a click anywhere else.
+ *
+ * They only closed by choosing something or hitting the same trigger again, so
+ * clicking away left them open over the form -- and the reply list sits right
+ * on top of the Destination cards.
+ */
+function closeMenus() {
+    replyMenuOpen.value = false;
+    postMenuOpen.value = false;
+}
+
+onMounted(() => document.addEventListener('click', closeMenus));
+onBeforeUnmount(() => document.removeEventListener('click', closeMenus));
 
 const hasDestination = computed(() => post.value.destination_type !== 'none');
 const canPublish = computed(() => composer.hasContent && !composer.overLimit && !composer.saving);
@@ -229,7 +245,7 @@ function uploadedOn(item) {
                 <button
                     type="button"
                     class="rounded-r-md border-l border-white/20 bg-[#4b4b4b] px-1.5 text-white transition hover:bg-[#3a3a3a]"
-                    @click="postMenuOpen = !postMenuOpen"
+                    @click.stop="postMenuOpen = !postMenuOpen"
                 >
                     <NavIcon name="chevron" :size="13" />
                 </button>
@@ -315,25 +331,43 @@ function uploadedOn(item) {
                             <button
                                 type="button"
                                 class="flex items-center gap-1 text-[12.5px] text-neutral-600 transition hover:text-neutral-900"
-                                @click="replyMenuOpen = !replyMenuOpen"
+                                @click.stop="replyMenuOpen = !replyMenuOpen"
                             >
-                                <NavIcon name="globe" :size="13" class="text-neutral-500" />
+                                <NavIcon :name="replyOption?.icon ?? 'globe'" :size="13" class="text-neutral-500" />
                                 {{ replyLabel }}
-                                <NavIcon name="chevron" :size="12" class="text-neutral-400" />
+                                <NavIcon name="chevron" :size="12" class="text-neutral-400" :class="replyMenuOpen ? 'rotate-180' : ''" />
                             </button>
 
+                            <!--
+                                Opens downward, the way the reference does. It
+                                opened up before, which put the list over the
+                                account row above it -- the one thing on screen
+                                that says whose timeline this is going to.
+                            -->
                             <div
                                 v-if="replyMenuOpen"
-                                class="absolute bottom-full left-0 z-30 mb-1 w-60 overflow-hidden rounded-md border border-neutral-200 bg-white py-1 shadow-lg"
+                                class="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-neutral-200 bg-white p-1 shadow-lg"
+                                @click.stop
                             >
                                 <button
                                     v-for="option in composer.options?.reply_settings ?? []"
                                     :key="option.value"
                                     type="button"
-                                    class="block w-full px-3 py-1.5 text-left text-[12.5px] hover:bg-neutral-50"
-                                    :class="post.reply_settings === option.value ? 'font-medium' : ''"
+                                    class="flex w-full items-center gap-2.5 rounded-md border px-2.5 py-2 text-left text-[13px] transition"
+                                    :class="post.reply_settings === option.value
+                                        ? 'border-neutral-900 font-medium'
+                                        : 'border-transparent hover:bg-neutral-50'"
                                     @click="post.reply_settings = option.value; replyMenuOpen = false"
-                                >{{ option.label }}</button>
+                                >
+                                    <NavIcon :name="option.icon" :size="15" class="shrink-0 text-neutral-500" />
+                                    <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
+                                    <NavIcon
+                                        v-if="post.reply_settings === option.value"
+                                        name="check"
+                                        :size="13"
+                                        class="shrink-0 text-neutral-900"
+                                    />
+                                </button>
                             </div>
                         </div>
 

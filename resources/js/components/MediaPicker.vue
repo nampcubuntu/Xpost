@@ -346,18 +346,20 @@ function onDrop(event) {
                     <img v-else :src="item.url" alt="" class="h-full w-full bg-neutral-100 object-cover">
 
                     <!--
-                        A bin, centred, on hover.
-                        A cross in the corner is the same shape as the one that
-                        closes a dialog, and this throws the file out of the
-                        post -- the icon should say which of the two it is.
+                        Top-right, where the reference puts it. The corner was
+                        only ambiguous while the glyph was a cross -- that reads
+                        as "close this", which is a different and reversible
+                        act. A bin says which of the two it is on its own, so
+                        the position is free to go back to the corner and leave
+                        the picture unobstructed.
                     -->
                     <button
                         type="button"
-                        class="absolute left-1/2 top-1/2 grid h-8 w-8 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-lg bg-neutral-900/85 text-white opacity-0 transition hover:bg-neutral-900 group-hover/pick:opacity-100"
+                        class="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-md bg-neutral-900/80 text-white opacity-0 transition hover:bg-neutral-900 group-hover/pick:opacity-100"
                         :aria-label="`Bỏ ${item.original_name}`"
                         @click="toggle(item)"
                     >
-                        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M2.6 4.2h10.8M6.2 4.2V2.8h3.6v1.4M4.1 4.2l.6 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.6-8.6M6.6 6.8v4.3M9.4 6.8v4.3" />
                         </svg>
                     </button>

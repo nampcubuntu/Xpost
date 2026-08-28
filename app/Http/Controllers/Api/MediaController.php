@@ -87,15 +87,14 @@ class MediaController extends Controller
             'disk' => $disk,
             'path' => $path,
             /*
-             * Video is filed under a number it was given, not the name it
-             * arrived with: clips come off phones and downloaders as
-             * `video.mp4` or `0.21.21.2.21.21.mp4`, so the one label the picker
-             * shows under each tile is the one that cannot tell them apart.
-             * Photos keep theirs -- a thumbnail identifies an image on its own.
+             * Filed under a number it was given, not the name it arrived with.
+             * Files come off phones and downloaders as `video.mp4`,
+             * `0.21.21.2.21.21.mp4` or `IMG_0042.jpg`, so the one label the
+             * picker shows under each tile is the one that cannot tell them
+             * apart. Photos too: two schemes in one column would mean reading
+             * each row to know which kind of name it is.
              */
-            'original_name' => str_starts_with((string) $file->getMimeType(), 'video/')
-                ? MediaName::forVideo()
-                : $file->getClientOriginalName(),
+            'original_name' => MediaName::next(),
             'mime' => $file->getMimeType(),
             'category' => MediaCategory::fromMime((string) $file->getMimeType()),
             'size' => $file->getSize(),

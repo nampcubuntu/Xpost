@@ -7,19 +7,20 @@ namespace App\Support;
 use App\Models\PostMedia;
 
 /**
- * The name an uploaded clip is filed under.
+ * The name an uploaded file is filed under.
  *
- * Video comes off a phone or a downloader as `video.mp4`, `0.21.21.2.21.21.mp4`
- * or whatever the source called it, and a library of a thousand campaigns ends
- * up with forty files named some variation of the same thing. The picker shows
- * that name under every tile, so the one label meant to tell two clips apart is
- * the one label that does not.
+ * Media comes off a phone or a downloader as `video.mp4`, `0.21.21.2.21.21.mp4`,
+ * `IMG_0042.jpg` or whatever the source called it, and a library of a thousand
+ * campaigns ends up with forty files named some variation of the same thing.
+ * The picker prints that name under every tile, so the one label meant to tell
+ * two files apart is the one label that does not.
  *
- * X files its own video under a number, and the shape is worth copying for the
+ * X files its own media under a number, and the shape is worth copying for the
  * property behind it: a name nobody chose cannot be a name somebody reused.
  *
- * Photos keep the name they arrived with. An image is usually recognisable from
- * its thumbnail, and a downloaded one already carries an id of its own.
+ * Every upload, photo and video alike. Two schemes in one column would mean
+ * reading each row to know which kind of name it is, and the category is
+ * already a field of its own.
  */
 final class MediaName
 {
@@ -31,7 +32,7 @@ final class MediaName
 
     private const ATTEMPTS = 5;
 
-    public static function forVideo(): string
+    public static function next(): string
     {
         for ($attempt = 0; $attempt < self::ATTEMPTS; $attempt++) {
             $name = self::PREFIX.'_'.self::snowflake();

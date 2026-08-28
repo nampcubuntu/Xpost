@@ -40,7 +40,7 @@ class MediaNameTest extends TestCase
     {
         // The shape X files its own video under, which is the shape being
         // matched -- their numbers index something inside X, not anything here.
-        $this->assertMatchesRegularExpression('/^13_\d{15,}$/', MediaName::forVideo());
+        $this->assertMatchesRegularExpression('/^13_\d{15,}$/', MediaName::next());
     }
 
     #[Test]
@@ -51,7 +51,7 @@ class MediaNameTest extends TestCase
          * millisecond, which is exactly when two files from one drag are
          * uploaded.
          */
-        $names = collect(range(1, 500))->map(fn () => MediaName::forVideo());
+        $names = collect(range(1, 500))->map(fn () => MediaName::next());
 
         $this->assertCount(500, $names->unique());
     }
@@ -61,9 +61,9 @@ class MediaNameTest extends TestCase
     {
         // Time in the high bits, which is what anyone scanning a column of
         // numbers is using them for.
-        $first = MediaName::forVideo();
+        $first = MediaName::next();
         usleep(2000);
-        $second = MediaName::forVideo();
+        $second = MediaName::next();
 
         $this->assertTrue($second > $first, "{$second} should sort after {$first}");
     }
@@ -73,11 +73,11 @@ class MediaNameTest extends TestCase
     {
         // Checked rather than assumed: "cannot collide" is a claim, and this is
         // the assertion behind it.
-        $taken = MediaName::forVideo();
+        $taken = MediaName::next();
 
         PostMedia::factory()->create(['team_id' => $this->team->id, 'original_name' => $taken]);
 
-        $this->assertNotSame($taken, MediaName::forVideo());
+        $this->assertNotSame($taken, MediaName::next());
     }
 
     /**
@@ -142,15 +142,32 @@ class MediaNameTest extends TestCase
     }
 
     #[Test]
-    public function an_uploaded_photo_keeps_the_name_it_arrived_with(): void
+    public function an_uploaded_photo_is_renamed_the_same_way(): void
     {
         /*
-         * A thumbnail identifies an image on its own, and a downloaded one
-         * usually carries an id already. Renaming both would throw away the
-         * only names in the library anybody chose.
+         * Same scheme as video. Two schemes in one column would mean reading
+         * each row to work out which kind of name it is, and the category is
+         * already a field of its own.
          */
-        $this->postJson('/api/v1/media', ['file' => UploadedFile::fake()->image('bien-quang-cao.jpg')])
+        $name = $this->postJson('/api/v1/media', ['file' => UploadedFile::fake()->image('IMG_0042.jpg')])
             ->assertCreated()
-            ->assertJsonPath('data.original_name', 'bien-quang-cao.jpg');
+            ->json('data.original_name');
+
+        $this->assertMatchesRegularExpression('/^13_\d{15,}$/', $name);
+    }
+
+    #[Test]
+    public function a_photo_and_a_video_are_told_apart_by_category_not_by_name(): void
+    {
+        // Which is the reason one scheme is enough: the kind is a column, and
+        // the name is only ever an identifier.
+        $photo = $this->postJson('/api/v1/media', ['file' => UploadedFile::fake()->image('a.jpg')])
+            ->assertCreated();
+        $video = $this->postJson('/api/v1/media', ['file' => $this->realVideo('b.mp4')])
+            ->assertCreated();
+
+        $this->assertNotSame($photo->json('data.original_name'), $video->json('data.original_name'));
+        $this->assertSame('tweet_image', $photo->json('data.category'));
+        $this->assertSame('tweet_video', $video->json('data.category'));
     }
 }

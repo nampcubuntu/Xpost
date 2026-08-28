@@ -8,6 +8,7 @@ use App\Enums\MediaCategory;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\PostMediaResource;
 use App\Models\PostMedia;
+use App\Support\MediaName;
 use App\Support\VideoProbe;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -85,7 +86,16 @@ class MediaController extends Controller
             'uploaded_by' => $request->user()->id,
             'disk' => $disk,
             'path' => $path,
-            'original_name' => $file->getClientOriginalName(),
+            /*
+             * Video is filed under a number it was given, not the name it
+             * arrived with: clips come off phones and downloaders as
+             * `video.mp4` or `0.21.21.2.21.21.mp4`, so the one label the picker
+             * shows under each tile is the one that cannot tell them apart.
+             * Photos keep theirs -- a thumbnail identifies an image on its own.
+             */
+            'original_name' => str_starts_with((string) $file->getMimeType(), 'video/')
+                ? MediaName::forVideo()
+                : $file->getClientOriginalName(),
             'mime' => $file->getMimeType(),
             'category' => MediaCategory::fromMime((string) $file->getMimeType()),
             'size' => $file->getSize(),

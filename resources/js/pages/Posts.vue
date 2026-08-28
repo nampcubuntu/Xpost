@@ -221,8 +221,17 @@ function closeMenus() {
     menuFor.value = null;
 }
 
-onMounted(() => document.addEventListener('click', closeMenus));
-onUnmounted(() => document.removeEventListener('click', closeMenus));
+onMounted(() => {
+    document.addEventListener('click', closeMenus);
+    document.addEventListener('visibilitychange', onVisibility);
+});
+
+onUnmounted(() => {
+    document.removeEventListener('click', closeMenus);
+    document.removeEventListener('visibilitychange', onVisibility);
+    // Or the page keeps polling for a list nobody is looking at any more.
+    clearTimeout(refreshTimer);
+});
 
 async function act(post, request, describe) {
     busy.value = post.id;
@@ -290,8 +299,11 @@ function destroyPost(post) {
     act(post, () => api.delete(`posts/${post.id}`), () => 'Đã xoá bài.');
 }
 
-async function load() {
-    loading.value = true;
+/**
+ * @param {boolean} silent  a background refresh, which must not blank the table
+ */
+async function load(silent = false) {
+    loading.value = ! silent;
 
     try {
         const { data } = await api.get('posts', {
@@ -316,6 +328,55 @@ async function load() {
         budget.value = data.budget ?? budget.value;
     } finally {
         loading.value = false;
+        // Chained rather than on a fixed interval: the next check is scheduled
+        // from the answer to the last one, so a slow reply never stacks up.
+        scheduleRefresh();
+    }
+}
+
+/*
+ * Live status without reloading.
+ *
+ * Not webhooks: nothing here is waiting on X. The counter in this column is
+ * Xpost's own fan-out -- it moves when a queue worker finishes a target, and X
+ * is never told and never tells. X's webhooks carry inbound events on an
+ * account, which is a different subject entirely.
+ *
+ * Not a stream either. `php artisan serve` handles one request at a time, so a
+ * single open EventSource would freeze the whole app, and under PHP-FPM it
+ * holds a worker per tab. Reverb would be the real answer to that, and it is a
+ * second daemon to start, expose and keep alive -- worth it when a publish run
+ * takes an hour, not for a page that is right the moment it loads.
+ *
+ * So: ask again, but only while there is an answer that can change.
+ */
+const REFRESH_MS = 5000;
+
+let refreshTimer;
+
+/** Posts with work still to do. Nothing else can change on its own. */
+const inFlight = computed(() => posts.value.some((post) => ['scheduled', 'publishing'].includes(post.status)
+    || (post.progress?.pending ?? 0) > 0));
+
+function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+
+    // A hidden tab is not being read, and every request costs a full trip to
+    // the edge. It catches up on focus instead.
+    if (! inFlight.value || document.hidden) {
+        return;
+    }
+
+    refreshTimer = setTimeout(() => load(true), REFRESH_MS);
+}
+
+/*
+ * Coming back to the tab is the moment the answer is most stale and most
+ * wanted, so it refreshes then rather than waiting out the interval.
+ */
+function onVisibility() {
+    if (! document.hidden && inFlight.value) {
+        load(true);
     }
 }
 
@@ -419,8 +480,21 @@ const destinationHost = (url) => {
         <div class="mb-5 flex flex-wrap items-start justify-between gap-3">
             <div>
                 <h1 class="text-xl font-semibold">Bài đăng</h1>
-                <p class="mt-1 text-[13px] text-neutral-500">
+                <p class="mt-1 flex items-center gap-2 text-[13px] text-neutral-500">
                     Soạn, lên lịch và theo dõi các bài đứng sau creative của bạn.
+
+                    <!--
+                        Only while something can still change. Saying "live" on
+                        a settled list would be a claim that quietly stops being
+                        true, and nobody would know which state they were in.
+                    -->
+                    <span v-if="inFlight" class="inline-flex items-center gap-1.5 text-[12px] text-green-700">
+                        <span class="relative flex h-1.5 w-1.5">
+                            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-75"></span>
+                            <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-green-600"></span>
+                        </span>
+                        Đang tự cập nhật
+                    </span>
                 </p>
             </div>
 

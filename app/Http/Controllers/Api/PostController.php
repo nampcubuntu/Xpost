@@ -160,6 +160,50 @@ class PostController extends Controller
         return response()->json(status: 204);
     }
 
+    /**
+     * Delete a selection in one go.
+     *
+     * The list is where posts are cleared out, and clearing out a test run
+     * means the same confirm dialog forty times. Each one is cancelled and
+     * deleted exactly as a single delete is -- pending targets first, so the
+     * queue is not left holding jobs for rows that are gone.
+     *
+     * Ids are resolved through the team scope rather than trusted: they arrive
+     * from a browser, and one from another team must find nothing.
+     */
+    public function destroyMany(Request $request): JsonResponse
+    {
+        $this->authorize('viewAny', Post::class);
+
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:500'],
+            'ids.*' => ['integer'],
+        ]);
+
+        $posts = Post::query()->whereKey($data['ids'])->get();
+        $deleted = 0;
+        $published = 0;
+
+        foreach ($posts as $post) {
+            if ($request->user()->cannot('delete', $post)) {
+                continue;
+            }
+
+            $published += $post->targets_published;
+
+            $this->fanout->cancel($post);
+            $post->delete();
+            $deleted++;
+        }
+
+        return response()->json([
+            'deleted' => $deleted,
+            // What is still on X afterwards. Deleting here never reaches a
+            // timeline, and the count is the only place that says so.
+            'published' => $published,
+        ]);
+    }
+
     /** Move a draft to scheduled (or fire it now) and start fan-out. */
     public function publish(Post $post): JsonResponse
     {

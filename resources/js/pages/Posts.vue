@@ -72,6 +72,77 @@ const flash = ref(null);
 const previewFor = ref(null);
 
 /*
+ * Rows ticked for a bulk action.
+ *
+ * Clearing out a test run meant the same confirm dialog forty times, which is
+ * how people learn to click through confirms without reading them -- and this
+ * particular one carries the warning that published tweets stay on X.
+ */
+const selected = ref(new Set());
+
+const allSelected = computed(() => posts.value.length > 0
+    && posts.value.every((post) => selected.value.has(post.id)));
+
+function toggle(id) {
+    selected.value.has(id) ? selected.value.delete(id) : selected.value.add(id);
+    selected.value = new Set(selected.value);
+}
+
+function toggleAll() {
+    // Read once, before the loop: mutating a Set is reactive, so testing the
+    // computed inside would flip halfway and the loop would undo its own work.
+    const clearing = allSelected.value;
+
+    posts.value.forEach((post) => {
+        clearing ? selected.value.delete(post.id) : selected.value.add(post.id);
+    });
+
+    selected.value = new Set(selected.value);
+}
+
+/** How many of the ticked rows already have tweets standing on X. */
+const selectedPublished = computed(() => posts.value
+    .filter((post) => selected.value.has(post.id))
+    .reduce((total, post) => total + (post.progress?.published ?? 0), 0));
+
+async function destroySelected() {
+    const published = selectedPublished.value;
+
+    /*
+     * The same warning as the single delete, because it is the same surprise:
+     * the row goes and the tweets do not. Said once for the whole selection
+     * rather than once per row -- a dialog nobody reads protects nobody.
+     */
+    const warning = published
+        ? `\n\n${published} bài đã đăng lên X sẽ KHÔNG bị xoá khỏi X.`
+        : '';
+
+    if (! window.confirm(`Xoá ${selected.value.size} bài khỏi Xpost?${warning}`)) {
+        return;
+    }
+
+    busy.value = 'bulk';
+
+    try {
+        const { data } = await api.delete('posts', { data: { ids: [...selected.value] } });
+
+        flash.value = {
+            type: 'ok',
+            message: data.published
+                ? `Đã xoá ${data.deleted} bài khỏi Xpost. ${data.published} bài vẫn còn trên X.`
+                : `Đã xoá ${data.deleted} bài.`,
+        };
+
+        selected.value = new Set();
+        await load();
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không xoá được.' };
+    } finally {
+        busy.value = null;
+    }
+}
+
+/*
  * What this team has spent at X today, against its ceiling.
  *
  * Shown here rather than on a settings page, because this is where the money is
@@ -234,6 +305,11 @@ async function load() {
 
         posts.value = data.data;
         meta.value = data.meta;
+
+        // Drop ticks for rows that are gone, or the count in the action bar
+        // promises rows the next action cannot find.
+        const live = new Set(posts.value.map((post) => post.id));
+        selected.value = new Set([...selected.value].filter((id) => live.has(id)));
         // Absent means the scheduler has not run in the last few minutes.
         schedulerLastRunAt.value = data.scheduler_last_run_at ?? null;
         halt.value = data.halt ?? null;
@@ -495,12 +571,43 @@ const destinationHost = (url) => {
             </select>
         </div>
 
+        <!--
+            Only present when something is ticked. A bar that is always there
+            with a disabled button is a row of things you cannot do.
+        -->
+        <div
+            v-if="selected.size"
+            class="mb-3 flex flex-wrap items-center gap-3 rounded-lg bg-neutral-900 px-4 py-2.5 text-[13px] text-white"
+        >
+            <span class="font-medium">Đã chọn {{ selected.size }}</span>
+
+            <!--
+                Said before the click, not only in the confirm: the number of
+                tweets that will stay on X is the fact that decides whether this
+                is the right action at all.
+            -->
+            <span v-if="selectedPublished" class="text-white/60">
+                {{ selectedPublished }} bài đã lên X sẽ vẫn còn trên đó
+            </span>
+
+            <button
+                class="rounded px-2 py-1 text-red-300 transition hover:bg-white/15 disabled:opacity-50"
+                :disabled="busy === 'bulk'"
+                @click="destroySelected"
+            >Xoá khỏi Xpost</button>
+
+            <button class="ml-auto text-white/60 transition hover:text-white" @click="selected = new Set()">Bỏ chọn</button>
+        </div>
+
         <!-- Table -->
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
                 <table class="w-full min-w-[980px] text-left text-[13px]">
                     <thead class="border-b border-neutral-200 text-xs text-neutral-500">
                         <tr>
+                            <th class="w-10 py-3 pl-4 pr-1">
+                                <input type="checkbox" :checked="allSelected" aria-label="Chọn tất cả" @change="toggleAll">
+                            </th>
                             <th class="px-4 py-3 font-normal">Tên bài</th>
                             <th class="px-4 py-3 font-normal">Đăng</th>
                             <th class="px-4 py-3 font-normal">Post ID</th>
@@ -513,14 +620,28 @@ const destinationHost = (url) => {
 
                     <tbody class="divide-y divide-neutral-100">
                         <tr v-if="loading">
-                            <td colspan="7" class="px-4 py-10 text-center text-neutral-500">Đang tải…</td>
+                            <td colspan="8" class="px-4 py-10 text-center text-neutral-500">Đang tải…</td>
                         </tr>
 
                         <tr v-else-if="!posts.length">
-                            <td colspan="7" class="px-4 py-10 text-center text-neutral-500">Chưa có bài đăng nào.</td>
+                            <td colspan="8" class="px-4 py-10 text-center text-neutral-500">Chưa có bài đăng nào.</td>
                         </tr>
 
-                        <tr v-for="post in posts" :key="post.id" class="align-top hover:bg-neutral-50">
+                        <tr
+                            v-for="post in posts"
+                            :key="post.id"
+                            class="align-top hover:bg-neutral-50"
+                            :class="selected.has(post.id) ? 'bg-neutral-50' : ''"
+                        >
+                            <td class="w-10 py-4 pl-4 pr-1">
+                                <input
+                                    type="checkbox"
+                                    :checked="selected.has(post.id)"
+                                    :aria-label="post.name || 'Không tiêu đề'"
+                                    @change="toggle(post.id)"
+                                >
+                            </td>
+
                             <!-- Tên bài -->
                             <td class="max-w-[220px] px-4 py-4">
                                 <RouterLink

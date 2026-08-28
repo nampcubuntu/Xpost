@@ -51,6 +51,7 @@ Route::prefix('v1')->group(function (): void {
 
             // ----- Posts -----
             Route::apiResource('posts', PostController::class);
+            Route::delete('posts', [PostController::class, 'destroyMany']);
             Route::get('posts/{post}/preview', [PostController::class, 'preview']);
             Route::get('posts/{post}/targets', [PostController::class, 'targets']);
             Route::post('posts/{post}/cancel', [PostController::class, 'cancel']);

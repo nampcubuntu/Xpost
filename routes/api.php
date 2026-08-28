@@ -55,6 +55,7 @@ Route::prefix('v1')->group(function (): void {
             Route::get('posts/{post}/targets', [PostController::class, 'targets']);
             Route::post('posts/{post}/cancel', [PostController::class, 'cancel']);
             Route::post('posts/{post}/retry-failed', [PostController::class, 'retryFailed']);
+            Route::post('posts/{post}/duplicate', [PostController::class, 'duplicate']);
 
             // Lifting a halt is a human saying the balance is back; Xpost
             // cannot read it, and X exposes no endpoint that would.

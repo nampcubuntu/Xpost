@@ -97,6 +97,53 @@ final class ComposerService
         ];
     }
 
+    /**
+     * A copy of a post, as a fresh draft.
+     *
+     * Reusing a campaign is the ordinary case -- same audience, same schedule
+     * shape, a new clip or a new line -- and the alternative is retyping all of
+     * it beside the original on a second screen.
+     *
+     * Everything that describes the post is carried: its media, its variants
+     * and its audience. Everything that describes what happened to it is not.
+     * The copy has never been published, so it starts as a draft with no
+     * targets, no published_at, and no schedule -- a copy that inherited a time
+     * in the past would either fire the moment it is saved or sit as a
+     * scheduled post that can never run.
+     */
+    public function duplicate(Post $post, int $userId): Post
+    {
+        $copy = $post->replicate([
+            'status', 'published_at', 'scheduled_at', 'window_ends_at',
+            'targets_total', 'targets_pending', 'targets_published', 'targets_failed',
+        ]);
+
+        // forceFill: status and schedule_mode are guarded, which is right --
+        // they are set by this service and by the publisher, never by a request.
+        $copy->forceFill([
+            'name' => trim(($post->name ?? '').' (bản sao)'),
+            'created_by' => $userId,
+            'status' => PostStatus::Draft,
+            // Immediate rather than the original's mode: the two modes that
+            // need a window would copy across without one.
+            'schedule_mode' => ScheduleMode::Immediate,
+        ]);
+
+        $copy->save();
+
+        $copy->media()->sync($post->media->pluck('id')->all());
+
+        $this->syncVariants($copy, $post->variants->map(fn (PostVariant $variant): array => [
+            'body' => $variant->body,
+            'headline' => $variant->headline,
+            'website_url' => $variant->website_url,
+            'media_ids' => $variant->media_ids,
+            'weight' => $variant->weight,
+        ])->all());
+
+        return $copy->fresh(['media', 'variants']);
+    }
+
     private function attributes(array $data): array
     {
         return array_intersect_key($data, array_flip([

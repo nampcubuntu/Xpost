@@ -1,10 +1,13 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import api from '../lib/api';
 import { useAuthStore } from '../stores/auth';
 import NavIcon from '../components/NavIcon.vue';
+import PhonePreview from '../components/PhonePreview.vue';
 
 const auth = useAuthStore();
+const router = useRouter();
 
 const posts = ref([]);
 const meta = ref(null);
@@ -57,6 +60,16 @@ const schedulerDown = computed(() => schedulerLastRunAt.value === null);
 const menuFor = ref(null);
 const busy = ref(null);
 const flash = ref(null);
+
+/*
+ * The post being looked at in the phone, or null.
+ *
+ * Held as the row itself rather than an id: the list already carries the body,
+ * the media and the destination, so the preview costs no request. Fetching one
+ * would put a round trip between the click and the answer, on a page whose
+ * whole job is scanning.
+ */
+const previewFor = ref(null);
 
 /*
  * What this team has spent at X today, against its ceiling.
@@ -164,6 +177,27 @@ function retryFailed(post) {
 function cancelPost(post) {
     act(post, () => api.post(`posts/${post.id}/cancel`),
         ({ data }) => `Đã huỷ ${data.cancelled} bài chưa gửi.`);
+}
+
+/**
+ * Copy this post and open the copy.
+ *
+ * Landing in the composer rather than back in the list: nobody duplicates a
+ * post to have two identical ones, they duplicate it to change something, and
+ * the copy is a draft until they do.
+ */
+async function duplicatePost(post) {
+    menuFor.value = null;
+    busy.value = post.id;
+
+    try {
+        const { data } = await api.post(`posts/${post.id}/duplicate`);
+        router.push({ name: 'composer.edit', params: { id: String(data.data.id) } });
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không nhân bản được.' };
+    } finally {
+        busy.value = null;
+    }
 }
 
 function destroyPost(post) {
@@ -672,6 +706,57 @@ const destinationHost = (url) => {
                                     role="menu"
                                     @click.stop
                                 >
+                                    <!--
+                                        Xem trước / Xem trên X / Sửa / Nhân bản,
+                                        the four the reference offers, above the
+                                        ones that only apply to a fan-out.
+                                    -->
+                                    <button
+                                        class="block w-full px-3 py-2 text-left text-[13px] hover:bg-neutral-50"
+                                        role="menuitem"
+                                        @click="previewFor = post; menuFor = null"
+                                    >
+                                        Xem trước
+                                    </button>
+
+                                    <!--
+                                        One post is many tweets here, which the
+                                        reference never has to deal with. With a
+                                        single account it opens that tweet; with
+                                        more it opens the delivery log, because
+                                        "the post" is not one thing to open.
+                                    -->
+                                    <a
+                                        v-if="post.sample?.permalink && post.progress?.published === 1"
+                                        :href="post.sample.permalink"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="block w-full px-3 py-2 text-[13px] hover:bg-neutral-50"
+                                        role="menuitem"
+                                        @click="menuFor = null"
+                                    >
+                                        Xem trên X
+                                    </a>
+                                    <RouterLink
+                                        v-else-if="post.progress?.published"
+                                        :to="{ name: 'posts.show', params: { id: String(post.id) } }"
+                                        class="block w-full px-3 py-2 text-[13px] hover:bg-neutral-50"
+                                        role="menuitem"
+                                    >
+                                        Xem {{ post.progress.published }} bài trên X
+                                    </RouterLink>
+
+                                    <button
+                                        class="block w-full px-3 py-2 text-left text-[13px] hover:bg-neutral-50 disabled:opacity-50"
+                                        :disabled="busy === post.id"
+                                        role="menuitem"
+                                        @click="duplicatePost(post)"
+                                    >
+                                        Nhân bản
+                                    </button>
+
+                                    <div class="my-1 border-t border-neutral-100"></div>
+
                                     <button
                                         v-if="post.progress?.failed"
                                         class="block w-full px-3 py-2 text-[13px] hover:bg-neutral-50 disabled:opacity-50"
@@ -741,6 +826,52 @@ const destinationHost = (url) => {
             <button class="xp-btn-ghost" :disabled="page <= 1" @click="page--">Trước</button>
             <span class="text-[13px] text-neutral-600">Trang {{ meta.current_page }} / {{ meta.last_page }}</span>
             <button class="xp-btn-ghost" :disabled="page >= meta.last_page" @click="page++">Sau</button>
+        </div>
+
+        <!--
+            Xem trước.
+
+            The same phone the composer draws, so what is checked here is what
+            was checked before publishing rather than a second rendering that
+            could disagree with it. The account shown is the one the row
+            already stands for.
+        -->
+        <div
+            v-if="previewFor"
+            class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-6"
+            @click.self="previewFor = null"
+        >
+            <div class="rounded-xl bg-white p-5 shadow-xl" @click.stop>
+                <div class="mb-3 flex items-start justify-between gap-6">
+                    <div class="min-w-0">
+                        <p class="truncate text-[14px] font-semibold">{{ previewFor.name || 'Không tiêu đề' }}</p>
+                        <p class="text-[12px] text-neutral-500">
+                            {{ previewFor.status_label }}
+                            <span v-if="previewFor.progress?.total"> · {{ previewFor.progress.total }} tài khoản</span>
+                        </p>
+                    </div>
+
+                    <button
+                        type="button"
+                        class="shrink-0 rounded p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+                        aria-label="Đóng"
+                        @click="previewFor = null"
+                    >
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                            <path d="M4 4l8 8M12 4l-8 8" />
+                        </svg>
+                    </button>
+                </div>
+
+                <PhonePreview
+                    :body="previewFor.body ?? ''"
+                    :headline="previewFor.headline ?? ''"
+                    :website-url="previewFor.destination_type === 'website' ? (previewFor.website_url ?? '') : ''"
+                    :media="previewFor.media ?? []"
+                    :account="previewFor.sample?.account ?? null"
+                    :promoted-only="previewFor.promoted_only === true"
+                />
+            </div>
         </div>
     </div>
 </template>

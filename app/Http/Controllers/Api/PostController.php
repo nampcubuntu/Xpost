@@ -199,6 +199,22 @@ class PostController extends Controller
         return response()->json($this->composer->preview($post));
     }
 
+    /**
+     * A copy of this post, as a new draft, ready to edit.
+     *
+     * Reusing a campaign is the ordinary case, and the alternative is retyping
+     * it beside the original on a second screen.
+     */
+    public function duplicate(Request $request, Post $post): JsonResponse
+    {
+        $this->authorize('create', Post::class);
+        $this->authorize('view', $post);
+
+        $copy = $this->composer->duplicate($post->load(['media', 'variants']), $request->user()->id);
+
+        return PostResource::make($copy)->response()->setStatusCode(201);
+    }
+
     /** Per-account delivery log for one post. */
     public function targets(Request $request, Post $post): AnonymousResourceCollection
     {

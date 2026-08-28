@@ -10,6 +10,7 @@ use App\Jobs\FanOutPost;
 use App\Models\Post;
 use App\Models\XAccount;
 use App\Models\XApp;
+use App\Support\TeamContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\Test;
@@ -254,5 +255,40 @@ class ComposerApiTest extends TestCase
         // menu changed must still load and still publish.
         $this->assertNotNull(ReplySettings::tryFrom('subscribers'));
         $this->assertSame('verified', ReplySettings::Verified->toApiValue());
+    }
+
+    #[Test]
+    public function another_teams_accounts_cannot_be_named_as_the_audience(): void
+    {
+        /*
+         * AudienceResolver filters on team_id, so this was never a leak -- the
+         * id resolved to nothing. But it passed validation, so the post was
+         * accepted and then published to nobody, with the zero visible only in
+         * an estimate nobody has to read.
+         */
+        [$other] = $this->tenant();
+        $stranger = XAccount::factory()->create(['team_id' => $other->id]);
+
+        TeamContext::set($this->team->id);
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/posts', $this->payload([
+                'audience' => ['mode' => 'accounts', 'accounts' => [$stranger->id]],
+            ]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('audience.accounts.0');
+    }
+
+    #[Test]
+    public function this_teams_accounts_are_still_accepted(): void
+    {
+        // The other half: tightening the rule must not refuse what it should.
+        $mine = XAccount::query()->where('team_id', $this->team->id)->firstOrFail();
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/posts', $this->payload([
+                'audience' => ['mode' => 'accounts', 'accounts' => [$mine->id]],
+            ]))
+            ->assertCreated();
     }
 }

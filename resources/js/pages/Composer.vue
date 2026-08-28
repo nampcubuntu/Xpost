@@ -30,7 +30,27 @@ const mediaPickerOpen = ref(false);
 // carries. The preview reads this while the picker is open.
 const pickerSelection = ref([]);
 
-const post = computed(() => composer.post);
+/*
+ * Writable, because a child can hand back a whole new post rather than patching
+ * one field of it.
+ *
+ * As a getter-only computed this silently ate every schedule change.
+ * SchedulePicker takes `v-model="post"` and emits `{...modelValue, ...patch}`,
+ * which compiles to `post = $event` -- a write to a readonly computed, which
+ * Vue answers with a dev-console warning and no effect. So all five modes, the
+ * date fields, the jitter and the per-minute cap did nothing at all, while
+ * AudiencePicker beside it worked: it binds `v-model="post.audience"`, and
+ * writing a property of the object was never the problem.
+ *
+ * Nothing looked wrong either, because `immediate` is the default and the radio
+ * a browser has just been clicked on stays visually checked on its own.
+ */
+const post = computed({
+    get: () => composer.post,
+    set: (value) => {
+        composer.post = value;
+    },
+});
 
 /**
  * How many accounts this post is heading for.

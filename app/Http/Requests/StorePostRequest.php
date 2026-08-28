@@ -13,6 +13,7 @@ use App\Models\Post;
 use App\Rules\FitsTweetLength;
 use App\Rules\ValidSpintax;
 use App\Services\Publishing\TweetTextWeigher;
+use App\Support\TeamContext;
 use App\Support\WallClock;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -83,9 +84,18 @@ class StorePostRequest extends FormRequest
             'audience' => ['required', 'array'],
             'audience.mode' => ['required', 'in:all,groups,accounts,filter'],
             'audience.groups' => ['array'],
-            'audience.groups.*' => ['integer', Rule::exists('account_groups', 'id')],
+            /*
+             * Scoped to the team, not just to the table.
+             *
+             * AudienceResolver filters on team_id, so an id from elsewhere was
+             * never a leak -- it resolved to nothing. But it passed validation,
+             * which meant a post aimed at another team's group was accepted and
+             * then published to nobody, with the zero only visible in an
+             * estimate nobody has to read.
+             */
+            'audience.groups.*' => ['integer', Rule::exists('account_groups', 'id')->where('team_id', TeamContext::id())],
             'audience.accounts' => ['array'],
-            'audience.accounts.*' => ['integer', Rule::exists('x_accounts', 'id')],
+            'audience.accounts.*' => ['integer', Rule::exists('x_accounts', 'id')->where('team_id', TeamContext::id())],
             'audience.exclude_accounts' => ['array'],
             'audience.exclude_groups' => ['array'],
             'audience.filters' => ['array'],

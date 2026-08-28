@@ -321,6 +321,43 @@ function onDrop(event) {
         <div class="space-y-3 p-5">
             <p class="text-[12.5px] font-medium leading-4 text-neutral-800">Phương tiện</p>
 
+            <!--
+                What is attached, above the library rather than inside it.
+
+                The count in the header said "1 of 4" and the only way to see
+                which one that was, was to scroll the grid hunting for a tick.
+                Here it is the first thing under the heading, and the × removes
+                it without finding it again.
+            -->
+            <div v-if="chosen.size" class="flex flex-wrap gap-2">
+                <div
+                    v-for="item in [...chosen.values()]"
+                    :key="`picked-${item.id}`"
+                    class="group/pick relative h-[100px] w-[100px] overflow-hidden rounded-lg border border-neutral-200"
+                >
+                    <video
+                        v-if="isVideo(item)"
+                        :src="posterSrc(item)"
+                        preload="metadata"
+                        muted
+                        playsinline
+                        class="h-full w-full bg-neutral-100 object-cover"
+                    ></video>
+                    <img v-else :src="item.url" alt="" class="h-full w-full bg-neutral-100 object-cover">
+
+                    <button
+                        type="button"
+                        class="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition hover:bg-black/85 group-hover/pick:opacity-100"
+                        :aria-label="`Bỏ ${item.original_name}`"
+                        @click="toggle(item)"
+                    >
+                        <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                            <path d="M4 4l8 8M12 4l-8 8" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
             <!-- Dropzone -->
             <div
                 class="grid cursor-pointer place-items-center rounded-md border border-dashed py-9 transition"

@@ -345,14 +345,20 @@ function onDrop(event) {
                     ></video>
                     <img v-else :src="item.url" alt="" class="h-full w-full bg-neutral-100 object-cover">
 
+                    <!--
+                        A bin, centred, on hover.
+                        A cross in the corner is the same shape as the one that
+                        closes a dialog, and this throws the file out of the
+                        post -- the icon should say which of the two it is.
+                    -->
                     <button
                         type="button"
-                        class="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition hover:bg-black/85 group-hover/pick:opacity-100"
+                        class="absolute left-1/2 top-1/2 grid h-8 w-8 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-lg bg-neutral-900/85 text-white opacity-0 transition hover:bg-neutral-900 group-hover/pick:opacity-100"
                         :aria-label="`Bỏ ${item.original_name}`"
                         @click="toggle(item)"
                     >
-                        <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                            <path d="M4 4l8 8M12 4l-8 8" />
+                        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M2.6 4.2h10.8M6.2 4.2V2.8h3.6v1.4M4.1 4.2l.6 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.6-8.6M6.6 6.8v4.3M9.4 6.8v4.3" />
                         </svg>
                     </button>
                 </div>

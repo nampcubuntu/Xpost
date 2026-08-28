@@ -318,7 +318,13 @@ function onDrop(event) {
                 still lands top-left, and this is a wall of pictures being
                 scanned rather than a list being read.
             -->
-            <div v-else class="-mr-2 max-h-[420px] overflow-y-auto pr-2">
+            <!--
+                Sized against the window rather than fixed, so a tall screen
+                shows more rather than scrolling a short box down the middle of
+                it. The floor keeps two tiles visible on a laptop, where the
+                header, dropzone, search and footer already claim their share.
+            -->
+            <div v-else class="-mr-2 max-h-[clamp(360px,60vh,820px)] overflow-y-auto pr-2">
               <div class="columns-2 gap-3 lg:columns-3">
                 <button
                     v-for="item in items"

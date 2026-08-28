@@ -261,17 +261,38 @@ function toggle(item) {
     chosen.value = next;
 }
 
+/*
+ * What is going up, and how far along.
+ *
+ * A spinner says only that something is happening, which is enough for a photo
+ * and not for a 40MB clip going out through a tunnel: for a minute or so it is
+ * indistinguishable from a hang, and the reasonable thing to do about a hang is
+ * to click again.
+ */
+const progress = ref(null);
+
 async function upload(files) {
     error.value = null;
     uploading.value = true;
 
+    const queue = Array.from(files ?? []);
+
     try {
-        for (const file of Array.from(files ?? [])) {
+        for (const [index, file] of queue.entries()) {
             const form = new FormData();
             form.append('file', file);
 
+            progress.value = { name: file.name, percent: 0, index: index + 1, total: queue.length };
+
             const { data } = await api.post('media', form, {
                 headers: { 'Content-Type': 'multipart/form-data' },
+                onUploadProgress: (event) => {
+                    // total is absent when the size is not known up front; the
+                    // spinner alone is the honest answer then.
+                    if (progress.value && event.total) {
+                        progress.value.percent = Math.round((event.loaded / event.total) * 100);
+                    }
+                },
             });
 
             const media = data.data ?? data;
@@ -287,6 +308,7 @@ async function upload(files) {
         error.value = e.response?.data?.message ?? 'Tải tệp thất bại.';
     } finally {
         uploading.value = false;
+        progress.value = null;
     }
 }
 
@@ -368,21 +390,51 @@ function onDrop(event) {
 
             <!-- Dropzone -->
             <div
-                class="grid cursor-pointer place-items-center rounded-md border border-dashed py-9 transition"
-                :class="dragging ? 'border-neutral-800 bg-neutral-50' : 'border-neutral-300 hover:bg-neutral-50'"
-                @click="fileInput.click()"
-                @dragover.prevent="dragging = true"
+                class="grid place-items-center rounded-md border border-dashed py-9 transition"
+                :class="[
+                    dragging ? 'border-neutral-800 bg-neutral-50' : 'border-neutral-300',
+                    // Not clickable while busy: a second pick would queue behind
+                    // the first with nothing on screen saying it had been taken.
+                    uploading ? 'cursor-default' : 'cursor-pointer hover:bg-neutral-50',
+                ]"
+                @click="uploading || fileInput.click()"
+                @dragover.prevent="dragging = !uploading"
                 @dragleave.prevent="dragging = false"
-                @drop.prevent="onDrop"
+                @drop.prevent="uploading || onDrop($event)"
             >
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" class="text-neutral-500">
-                    <path d="M21 13.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8" />
-                    <path d="M3 15.5 8 11l4.5 4M18 15v6M15 18h6" />
-                    <circle cx="9" cy="8.5" r="1.4" />
-                </svg>
-                <p class="mt-2 text-[12.5px] text-neutral-600">
-                    {{ uploading ? 'Đang tải lên…' : 'Drag and drop or click to upload' }}
-                </p>
+                <!-- Uploading: a spinner in place of the icon, as the reference does -->
+                <template v-if="uploading">
+                    <svg class="animate-spin text-neutral-500" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9.5" stroke="currentColor" stroke-width="2.2" opacity=".2" />
+                        <path d="M21.5 12A9.5 9.5 0 0 0 12 2.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                    </svg>
+
+                    <p class="mt-2 max-w-[80%] truncate text-[12.5px] text-neutral-700">
+                        Đang tải lên {{ progress?.name }}
+                        <span v-if="progress?.total > 1" class="text-neutral-400">({{ progress.index }}/{{ progress.total }})</span>
+                    </p>
+
+                    <!--
+                        A bar, because the number alone jumps in a way that
+                        reads as stalling: the last few percent are the server
+                        writing the file, and nothing moves during them.
+                    -->
+                    <div class="mt-2 h-1 w-40 overflow-hidden rounded-full bg-neutral-200">
+                        <div
+                            class="h-full rounded-full bg-neutral-800 transition-[width] duration-200"
+                            :style="{ width: `${progress?.percent ?? 0}%` }"
+                        ></div>
+                    </div>
+                </template>
+
+                <template v-else>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" class="text-neutral-500">
+                        <path d="M21 13.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8" />
+                        <path d="M3 15.5 8 11l4.5 4M18 15v6M15 18h6" />
+                        <circle cx="9" cy="8.5" r="1.4" />
+                    </svg>
+                    <p class="mt-2 text-[12.5px] text-neutral-600">Drag and drop or click to upload</p>
+                </template>
 
                 <input
                     ref="fileInput"

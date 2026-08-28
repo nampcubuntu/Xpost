@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Enums\AccountStatus;
+use App\Enums\ReplySettings;
 use App\Enums\TargetStatus;
 use App\Models\Post;
 use App\Models\PostTarget;
@@ -234,6 +235,40 @@ class PostPublisherTest extends TestCase
         $this->publish();
 
         Http::assertSent(fn ($request) => ($request->data()['nullcast'] ?? false) === true);
+    }
+
+    #[Test]
+    public function the_posts_reply_setting_reaches_the_tweet_body(): void
+    {
+        /*
+         * The last link in the chain. TweetPayload puts the value in the body,
+         * and the enum spells it the way the API schema does -- both asserted
+         * elsewhere -- but neither says the publisher reads it off the right
+         * post. It takes it from $target->post rather than from the target, so
+         * a fan-out that lost the relation would publish with X's default and
+         * nothing on the row would say so.
+         */
+        $this->target->post->forceFill(['reply_settings' => ReplySettings::MentionedUsers])->save();
+
+        Http::fake(['api.x.com/2/tweets' => Http::response(['data' => ['id' => '1', 'text' => 'x']])]);
+
+        $this->publish();
+
+        Http::assertSent(fn ($request) => ($request->data()['reply_settings'] ?? null) === 'mentionedUsers');
+    }
+
+    #[Test]
+    public function the_default_setting_leaves_the_field_out_of_the_body(): void
+    {
+        // "everyone" is not a value X accepts -- it is what you get by not
+        // sending the field, so sending the word would be refused.
+        $this->target->post->forceFill(['reply_settings' => ReplySettings::Everyone])->save();
+
+        Http::fake(['api.x.com/2/tweets' => Http::response(['data' => ['id' => '1', 'text' => 'x']])]);
+
+        $this->publish();
+
+        Http::assertSent(fn ($request) => ! array_key_exists('reply_settings', $request->data()));
     }
 
     protected function tearDown(): void

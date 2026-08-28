@@ -355,11 +355,11 @@ function onDrop(event) {
                     -->
                     <button
                         type="button"
-                        class="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-md bg-neutral-900/80 text-white opacity-0 transition hover:bg-neutral-900 group-hover/pick:opacity-100"
+                        class="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-lg bg-neutral-900/80 text-white opacity-0 transition hover:bg-neutral-900 group-hover/pick:opacity-100"
                         :aria-label="`Bỏ ${item.original_name}`"
                         @click="toggle(item)"
                     >
-                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M2.6 4.2h10.8M6.2 4.2V2.8h3.6v1.4M4.1 4.2l.6 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.6-8.6M6.6 6.8v4.3M9.4 6.8v4.3" />
                         </svg>
                     </button>

@@ -28,6 +28,11 @@ const search = ref('');
 const type = ref('all');
 const fileInput = ref(null);
 
+// Declared above load(), which clears it: relying on the call being deferred
+// past the end of the script body is a footgun for whoever moves load() next.
+const playing = ref(null);
+const videoEls = {};
+
 // Keyed by id so re-fetching (search, tab change) never drops a selection that
 // is currently filtered out of view.
 const chosen = ref(new Map(props.selected.map((m) => [m.id, m])));
@@ -51,6 +56,9 @@ const meta = ref({});
 
 async function load() {
     loading.value = true;
+    // The element playing is about to be unmounted; leaving the id set would
+    // show a pause badge on whatever tile inherits it.
+    playing.value = null;
 
     try {
         const { data } = await api.get('media', {
@@ -76,6 +84,69 @@ watch([search, type], () => {
 });
 
 const isVideo = (item) => (item.mime ?? '').startsWith('video/');
+
+/*
+ * Playing a clip in the grid, before committing it to a post.
+ *
+ * A still frame says what a video looks like at one instant, which is not the
+ * thing being chosen -- and several of these files open on a dark or empty
+ * frame, so the tile can be blank for a clip that is fine. Picking the wrong
+ * one is otherwise found out at publish, across every account at once.
+ */
+function setVideoEl(id, el) {
+    if (el) {
+        videoEls[id] = el;
+    } else {
+        delete videoEls[id];
+    }
+}
+
+async function togglePreview(item) {
+    const el = videoEls[item.id];
+
+    if (!el) {
+        return;
+    }
+
+    if (playing.value === item.id) {
+        el.pause();
+        playing.value = null;
+
+        return;
+    }
+
+    /*
+     * One at a time. Several tiles playing at once is noise to look at, and
+     * every one of them is a video being pulled down a connection that also
+     * has to carry the uploads.
+     */
+    const current = videoEls[playing.value];
+
+    if (current) {
+        current.pause();
+        current.currentTime = 0;
+    }
+
+    playing.value = item.id;
+
+    try {
+        await el.play();
+    } catch {
+        // Refused by the browser, usually for want of a gesture it did not
+        // count. The tile stays a still, which is what it already was.
+        playing.value = null;
+    }
+}
+
+/**
+ * Ask for a frame rather than only the metadata.
+ *
+ * With preload="metadata" alone a browser is free to render nothing until
+ * play, which is why some tiles are blank rectangles. The fragment asks it to
+ * seek a tenth of a second in, which forces a decoded frame and costs the same
+ * request -- the URL to the server is unchanged.
+ */
+const posterSrc = (item) => `${item.url}#t=0.1`;
 
 function rememberMeta(id, el) {
     const width = el.videoWidth || el.naturalWidth;
@@ -340,12 +411,14 @@ function onDrop(event) {
                 >
                     <video
                         v-if="isVideo(item)"
-                        :src="item.url"
+                        :ref="(el) => setVideoEl(item.id, el)"
+                        :src="posterSrc(item)"
                         preload="metadata"
                         muted
                         playsinline
                         class="h-full w-full bg-neutral-100 object-cover"
                         @loadedmetadata="rememberMeta(item.id, $event.target)"
+                        @ended="playing = null"
                     ></video>
                     <img
                         v-else
@@ -359,6 +432,38 @@ function onDrop(event) {
                         v-if="durationLabel(item)"
                         class="absolute left-2 top-2 rounded bg-black/75 px-1.5 py-0.5 text-[11px] font-medium text-white"
                     >{{ durationLabel(item) }}</span>
+
+                    <!--
+                        Play, and only play.
+
+                        Sized to itself rather than covering the tile: an
+                        overlay across the whole thing would swallow every
+                        click, and selecting is what this grid is for. Clicking
+                        the badge previews, clicking anywhere else still picks.
+
+                        A span rather than a button because it sits inside one,
+                        and a button inside a button is not valid HTML -- so it
+                        carries the role and the key handler by hand.
+                    -->
+                    <span
+                        v-if="isVideo(item)"
+                        role="button"
+                        tabindex="0"
+                        :aria-label="playing === item.id ? 'Tạm dừng' : 'Xem trước'"
+                        class="absolute left-1/2 top-1/2 grid h-11 w-11 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white transition hover:scale-105 hover:bg-black/80"
+                        :class="playing === item.id ? 'opacity-0 group-hover:opacity-100' : 'opacity-90'"
+                        @click.stop="togglePreview(item)"
+                        @keydown.enter.stop.prevent="togglePreview(item)"
+                        @keydown.space.stop.prevent="togglePreview(item)"
+                    >
+                        <svg v-if="playing === item.id" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <rect x="3.5" y="2.5" width="3.5" height="11" rx="1" />
+                            <rect x="9" y="2.5" width="3.5" height="11" rx="1" />
+                        </svg>
+                        <svg v-else width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M5 3.2 13 8l-8 4.8z" />
+                        </svg>
+                    </span>
 
                     <!-- Selection dot -->
                     <span

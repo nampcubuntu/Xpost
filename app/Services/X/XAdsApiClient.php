@@ -8,6 +8,7 @@ use App\Enums\CredentialType;
 use App\Exceptions\XApiException;
 use App\Exceptions\XAuthException;
 use App\Models\XAccount;
+use App\Support\ProxyFailure;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -135,6 +136,12 @@ final class XAdsApiClient
     {
         if ($response->successful()) {
             return $response;
+        }
+
+        // Same rule as the base client: a proxy's refusal is not X's answer,
+        // and this one is minted seconds before every post that carries a card.
+        if ($explained = ProxyFailure::fromStatus($response->status(), $this->account->proxy)) {
+            throw new XApiException($explained, 407, 'proxy_rejected', []);
         }
 
         $error = data_get($response->json(), 'errors.0', []);

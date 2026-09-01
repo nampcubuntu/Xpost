@@ -143,4 +143,21 @@ class Post extends Model
     {
         return $this->hasOne(PostTarget::class)->ofMany('id', 'min');
     }
+
+    /**
+     * One failure standing in for the rest.
+     *
+     * The list said "1 lỗi" and stopped there, so reading what went wrong meant
+     * opening the post -- and on a fan-out where every target failed for the
+     * same reason, opening it to read the same sentence again. A thousand
+     * targets refused by one dead proxy is one fact, and the row can hold it.
+     *
+     * The latest rather than the first: a retry that failed differently is the
+     * one worth reading.
+     */
+    public function lastFailedTarget(): HasOne
+    {
+        return $this->hasOne(PostTarget::class)
+            ->ofMany(['id' => 'max'], fn ($query) => $query->whereNotNull('error_code'));
+    }
 }

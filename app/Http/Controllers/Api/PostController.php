@@ -41,6 +41,9 @@ class PostController extends Controller
             ->with([
                 'campaign', 'author', 'media',
                 'sampleTarget.account:id,username,name,avatar_url',
+                // Qualified: ofMany joins a derived table, so a bare `id` or
+                // `post_id` here is ambiguous and MySQL refuses the query.
+                'lastFailedTarget:post_targets.id,post_targets.post_id,post_targets.error_code,post_targets.error_message',
             ])
             ->status($request->query('status'))
             ->type($request->query('type'))

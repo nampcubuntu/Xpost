@@ -7,6 +7,7 @@ namespace App\Jobs;
 use App\Enums\TargetStatus;
 use App\Models\PostTarget;
 use App\Services\Publishing\PostPublisher;
+use App\Support\ProxyFailure;
 use App\Support\TeamContext;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -102,15 +103,30 @@ class PublishPostTarget implements ShouldQueue
     public function failed(\Throwable $e): void
     {
         TeamContext::runAs($this->teamId, function () use ($e): void {
-            PostTarget::withoutGlobalScopes()
+            $target = PostTarget::withoutGlobalScopes()
+                ->with('account.proxy')
                 ->whereKey($this->targetId)
-                ->where('status', TargetStatus::Publishing->value)
-                ->update([
-                    'status' => TargetStatus::Failed->value,
-                    'error_code' => 'job_failed',
-                    'error_message' => mb_substr($e->getMessage(), 0, 2000),
-                    'updated_at' => now(),
-                ]);
+                ->first();
+
+            if ($target === null || $target->status !== TargetStatus::Publishing) {
+                return;
+            }
+
+            /*
+             * Named for the hop that failed, when it can be.
+             *
+             * Everything an account does goes through its proxy, so a curl
+             * error here is as likely to be the proxy as X -- and "cURL error
+             * 28" in the failed column sends whoever reads it to look at X,
+             * which is the one place that cannot be the problem.
+             */
+            $explained = ProxyFailure::fromThrowable($e, $target->account?->proxy);
+
+            $target->forceFill([
+                'status' => TargetStatus::Failed->value,
+                'error_code' => $explained === null ? 'job_failed' : 'proxy_unreachable',
+                'error_message' => mb_substr($explained ?? $e->getMessage(), 0, 2000),
+            ])->save();
         });
     }
 }

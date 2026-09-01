@@ -1032,6 +1032,26 @@ const destinationHost = (url) => {
                                     {{ post.progress.published }}/{{ post.progress.total }}
                                     <span v-if="post.progress.failed" class="text-red-600">· {{ post.progress.failed }} lỗi</span>
                                 </p>
+
+                                <!--
+                                    The reason, on the row.
+
+                                    A count is not a diagnosis: "1 lỗi" sent
+                                    whoever read it into the post to find out
+                                    what happened, and on a fan-out where one
+                                    dead proxy refused every target, into the
+                                    post to read the same sentence a thousand
+                                    times. Clamped to two lines so a long
+                                    message cannot push the row taller than the
+                                    thumbnail beside it.
+                                -->
+                                <p
+                                    v-if="post.last_error"
+                                    class="mt-1 max-w-[220px] text-xs leading-snug text-red-600"
+                                    :title="post.last_error.message"
+                                >
+                                    <span class="line-clamp-2">{{ post.last_error.message }}</span>
+                                </p>
                             </td>
 
                             <!-- Thời điểm -->

@@ -12,6 +12,7 @@ use App\Models\XAccount;
 use App\Services\X\DTO\RateLimitSnapshot;
 use App\Services\X\DTO\TweetPayload;
 use App\Services\X\DTO\TweetResult;
+use App\Support\ProxyFailure;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -173,6 +174,23 @@ final class XApiClient
     {
         if ($response->successful()) {
             return $response;
+        }
+
+        /*
+         * A 407 could only have come from the proxy, so it must not be filed as
+         * X's answer. Caught here rather than left to callers because this is
+         * the choke point every request passes -- and the alternative was a log
+         * line reading "X API error" about a request X never received, and a
+         * failed column reading "HTTP request returned status code 407".
+         */
+        if ($explained = ProxyFailure::fromStatus($response->status(), $this->account->proxy)) {
+            Log::channel('xpost')->warning('Proxy refused the request', [
+                'account_id' => $this->account->id,
+                'proxy_id' => $this->account->proxy?->id,
+                'status' => $response->status(),
+            ]);
+
+            throw new XApiException($explained, 407, 'proxy_rejected', []);
         }
 
         $body = $response->json() ?? ['detail' => $response->body()];

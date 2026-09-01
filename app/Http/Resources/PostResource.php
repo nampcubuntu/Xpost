@@ -84,6 +84,19 @@ class PostResource extends JsonResource
                 'weight' => $v->weight,
             ])),
 
+            /*
+             * Why the failures failed, once.
+             *
+             * The list showed a count and nothing else, so the only way to read
+             * a reason was to open the post -- and where one dead proxy refused
+             * every target, to open it and read the same sentence a thousand
+             * times over. Loaded as a relation so a page of twenty-five posts
+             * is one extra query, not twenty-five.
+             */
+            'last_error' => $this->whenLoaded('lastFailedTarget', fn () => $this->lastFailedTarget ? [
+                'code' => $this->lastFailedTarget->error_code,
+                'message' => $this->lastFailedTarget->error_message,
+            ] : null),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

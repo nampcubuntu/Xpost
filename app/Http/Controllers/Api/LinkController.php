@@ -373,10 +373,21 @@ class LinkController extends Controller
             return response()->json(['message' => 'Chưa có domain nào để dựng short link.'], 422);
         }
 
+        /*
+         * All of them at once, rather than one after another.
+         *
+         * Measured at 315ms per call against the live endpoint, so shortening a
+         * page of fifty held this request for sixteen seconds -- and `artisan
+         * serve` handles one request at a time, which made that sixteen seconds
+         * of the whole application.
+         */
+        $urls = array_map(fn (string $key) => $domain->url($key), $data['keys']);
+        $tiny = $this->tiny->shortenMany($urls);
+
         $result = [];
 
         foreach ($data['keys'] as $key) {
-            $result[$key] = $this->tiny->shorten($domain->url($key));
+            $result[$key] = $tiny[$domain->url($key)] ?? null;
         }
 
         return response()->json(['data' => $result]);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\TinyLink;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
@@ -436,5 +437,87 @@ class LinkStoreTest extends TestCase
         $meta = $this->actingAs($this->user)->getJson('/api/v1/links')->assertOk()->json('meta');
 
         $this->assertFalse($meta['complete']);
+    }
+
+    #[Test]
+    public function a_page_is_shortened_in_one_go_rather_than_one_at_a_time(): void
+    {
+        /*
+         * Measured at 315ms per call against the live endpoint, so a page of
+         * fifty held the request for sixteen seconds -- and `artisan serve`
+         * handles one request at a time, which made that sixteen seconds of the
+         * whole application.
+         */
+        config(['xpost.links.tinyurl.enabled' => true, 'xpost.links.tinyurl.token' => '']);
+
+        Http::fake([
+            'tinyurl.com/api-create.php*' => Http::sequence()
+                ->push('https://tinyurl.com/aaa')
+                ->push('https://tinyurl.com/bbb'),
+            'api.cloudflare.com/*' => Http::response(['success' => true]),
+        ]);
+
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links/shorten', ['keys' => ['r:one', 'r:two']])
+            ->assertOk()
+            ->assertJsonPath('data.r:one', 'https://tinyurl.com/aaa')
+            ->assertJsonPath('data.r:two', 'https://tinyurl.com/bbb');
+    }
+
+    #[Test]
+    public function a_link_already_shortened_is_not_shortened_again(): void
+    {
+        /*
+         * Asking twice mints a second code, and a post already carrying the
+         * first becomes untraceable -- two live links to the same place and
+         * nothing saying which is in use where.
+         */
+        config(['xpost.links.tinyurl.enabled' => true, 'xpost.links.tinyurl.token' => '']);
+
+        Http::fake([
+            'tinyurl.com/api-create.php*' => Http::response('https://tinyurl.com/once'),
+            'api.cloudflare.com/*' => Http::response(['success' => true]),
+        ]);
+
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
+
+        $first = $this->actingAs($this->user)
+            ->postJson('/api/v1/links/shorten', ['keys' => ['r:same']])->json('data.r:same');
+
+        $second = $this->actingAs($this->user)
+            ->postJson('/api/v1/links/shorten', ['keys' => ['r:same']])->json('data.r:same');
+
+        $this->assertSame($first, $second);
+        $this->assertSame(1, TinyLink::query()->count(), 'a second code was minted for the same link');
+    }
+
+    #[Test]
+    public function one_refusal_does_not_take_the_rest_of_the_page_with_it(): void
+    {
+        // The endpoint answers the word "Error" with a 200, so the body has to
+        // be read rather than the status -- and one bad answer is one empty
+        // cell, not a failed page.
+        config(['xpost.links.tinyurl.enabled' => true, 'xpost.links.tinyurl.token' => '']);
+
+        Http::fake([
+            'tinyurl.com/api-create.php*' => Http::sequence()
+                ->push('Error')
+                ->push('https://tinyurl.com/fine'),
+            'api.cloudflare.com/*' => Http::response(['success' => true]),
+        ]);
+
+        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links/shorten', ['keys' => ['r:bad', 'r:good']])
+            ->assertOk()
+            ->assertJsonPath('data.r:bad', null)
+            ->assertJsonPath('data.r:good', 'https://tinyurl.com/fine');
+
+        // The failure left no row, so the next attempt tries again rather than
+        // caching the absence.
+        $this->assertSame(1, TinyLink::query()->count());
     }
 }

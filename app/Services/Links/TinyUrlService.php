@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Links;
 
 use App\Models\TinyLink;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -25,6 +26,11 @@ final class TinyUrlService
     private const MODERN = 'https://api.tinyurl.com/create';
 
     private const LEGACY = 'https://tinyurl.com/api-create.php';
+
+    /** How many to have in flight at once. Small on purpose: the legacy
+     *  endpoint needs no account and publishes no rate limit, which is a
+     *  reason to be gentle with it rather than a licence not to be. */
+    private const BATCH = 5;
 
     public function isEnabled(): bool
     {
@@ -84,6 +90,123 @@ final class TinyUrlService
         ]);
 
         return $tiny;
+    }
+
+    /**
+     * A page of targets, shortened together.
+     *
+     * One at a time this is 315ms each, measured against the live endpoint --
+     * so the button that shortens a page of fifty held the request for sixteen
+     * seconds, and `artisan serve` is single-threaded, which makes that sixteen
+     * seconds of the whole app.
+     *
+     * Concurrent, but in small batches rather than all at once: the legacy
+     * endpoint needs no account and publishes no rate limit, which is exactly
+     * why it should not be handed fifty simultaneous requests. Fifty targets
+     * become ten rounds of five.
+     *
+     * Only the modern endpoint is pooled. The legacy one is a plain GET and
+     * pools the same way; the difference is only in how the answer is read.
+     *
+     * @param  list<string>  $targetUrls
+     * @return array<string, string|null> keyed by target, null where it failed
+     */
+    public function shortenMany(array $targetUrls): array
+    {
+        $targetUrls = array_values(array_unique($targetUrls));
+
+        // Everything already minted, in one query rather than one per target.
+        $known = $this->known($targetUrls);
+        $missing = array_values(array_diff($targetUrls, array_keys($known)));
+
+        if ($missing === []) {
+            return $known;
+        }
+
+        $token = (string) config('xpost.links.tinyurl.token');
+        $timeout = (int) config('xpost.http.timeout', 30);
+        $minted = [];
+
+        foreach (array_chunk($missing, self::BATCH) as $chunk) {
+            try {
+                $responses = Http::pool(fn ($pool) => array_map(
+                    fn (string $url) => $this->queue($pool, $url, $token, $timeout),
+                    $chunk,
+                ));
+            } catch (\Throwable $e) {
+                Log::channel('xpost')->warning('TinyURL batch failed', ['error' => $e->getMessage()]);
+
+                continue;
+            }
+
+            foreach ($chunk as $i => $url) {
+                $tiny = $this->read($responses[$i] ?? null, $token !== '');
+
+                if ($tiny !== null) {
+                    $minted[$url] = $tiny;
+                }
+            }
+        }
+
+        /*
+         * Written after the whole run, and only what came back. A failure
+         * leaves no row, so the next attempt tries again rather than caching
+         * the absence.
+         */
+        foreach ($minted as $url => $tiny) {
+            TinyLink::create([
+                'target_url' => $url,
+                'target_hash' => TinyLink::hashFor($url),
+                'tiny_url' => $tiny,
+            ]);
+        }
+
+        // Nulls for the ones that failed, so the caller can tell them apart
+        // from ones it never asked about.
+        return array_replace(
+            array_fill_keys($targetUrls, null),
+            $known,
+            $minted,
+        );
+    }
+
+    /** One request into the pool, in whichever dialect is configured. */
+    private function queue($pool, string $url, string $token, int $timeout)
+    {
+        if ($token === '') {
+            return $pool->timeout($timeout)->get(self::LEGACY, ['url' => $url]);
+        }
+
+        return $pool->withToken($token)->acceptJson()->timeout($timeout)->post(self::MODERN, [
+            'url' => $url,
+            'domain' => config('xpost.links.tinyurl.domain') ?: 'tinyurl.com',
+        ]);
+    }
+
+    /**
+     * The tiny link out of one response, or null.
+     *
+     * A pooled entry is a Throwable when the request itself failed, which is
+     * not a response and must not be called as one.
+     */
+    private function read($response, bool $modern): ?string
+    {
+        if (! $response instanceof Response) {
+            return null;
+        }
+
+        if ($modern) {
+            return $response->failed() ? null : $response->json('data.tiny_url');
+        }
+
+        /*
+         * The legacy endpoint answers the URL as plain text, or the word
+         * "Error" with a 200 -- so the body has to be inspected, not just the
+         * status.
+         */
+        $body = trim($response->body());
+
+        return $response->successful() && str_starts_with($body, 'http') ? $body : null;
     }
 
     private function mint(string $targetUrl, ?string $alias): ?string

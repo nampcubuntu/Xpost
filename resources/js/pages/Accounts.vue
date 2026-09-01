@@ -230,6 +230,21 @@ function onProxyPick(select) {
     }
 }
 
+/*
+ * An account the publisher is currently standing off from.
+ *
+ * Derived rather than stored: cooldown_until is a moment, and a moment that
+ * has passed is simply no longer true. A status column would have needed
+ * something to set it back, and nothing would have.
+ */
+const inCooldown = (account) => account.cooldown_until
+    && new Date(account.cooldown_until) > new Date();
+
+const shortTime = (iso) => new Date(iso).toLocaleTimeString('vi-VN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+});
 /** How the timezone on a row got there — a guess is worth flagging as one. */
 const sourceLabel = {
     manual: 'đặt tay',
@@ -721,6 +736,32 @@ async function connectAccount(flow) {
                             <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="badgeClass[account.status]">
                                 {{ account.status_label }}
                             </span>
+
+                            <!--
+                                Backoff, which the status column could not say.
+
+                                Three failures in a row pulls an account out of
+                                rotation for thirty minutes and does not change
+                                its status -- deliberately, because it heals
+                                itself and a status that needs something to set
+                                it back would stick. But "Hoạt động" on an
+                                account that will not be published to for the
+                                next hour is the wrong half of the truth, and
+                                this is derived, so it clears on its own.
+                            -->
+                            <p
+                                v-if="inCooldown(account)"
+                                class="mt-0.5 text-[11px] text-amber-700"
+                                :title="account.last_error ?? ''"
+                            >tạm nghỉ tới {{ shortTime(account.cooldown_until) }}</p>
+
+                            <!-- The reason it needs attention, where the reason
+                                 is known and the state is not self-healing. -->
+                            <p
+                                v-else-if="account.last_error && account.status !== 'active'"
+                                class="mt-0.5 max-w-[200px] truncate text-[11px] text-neutral-500"
+                                :title="account.last_error"
+                            >{{ account.last_error }}</p>
                         </td>
                         <td class="px-4 py-2.5 text-neutral-600">{{ account.app?.name ?? '—' }}</td>
 
@@ -819,14 +860,29 @@ async function connectAccount(flow) {
                         </td>
                         <td class="px-4 py-2.5">
                             <div class="flex items-center gap-1.5">
-                                <div class="h-1.5 w-12 overflow-hidden rounded-full bg-neutral-200">
-                                    <div
-                                        class="h-full rounded-full"
-                                        :class="account.health_score > 70 ? 'bg-green-600' : account.health_score > 40 ? 'bg-amber-500' : 'bg-red-600'"
-                                        :style="{ width: `${account.health_score}%` }"
-                                    ></div>
-                                </div>
-                                <span class="text-xs text-neutral-500">{{ account.health_score }}</span>
+                                <!--
+                                    A full green bar on an account that has
+                                    never posted is the column default drawn as
+                                    a measurement. It moves by +1 per published
+                                    target and -5 per failure, so before the
+                                    first one there is nothing to report -- and
+                                    1,019 of these accounts were reading 100/100
+                                    having never sent anything.
+                                -->
+                                <template v-if="account.last_posted_at">
+                                    <div class="h-1.5 w-12 overflow-hidden rounded-full bg-neutral-200">
+                                        <div
+                                            class="h-full rounded-full"
+                                            :class="account.health_score > 70 ? 'bg-green-600' : account.health_score > 40 ? 'bg-amber-500' : 'bg-red-600'"
+                                            :style="{ width: `${account.health_score}%` }"
+                                        ></div>
+                                    </div>
+                                    <span class="text-xs text-neutral-500">{{ account.health_score }}</span>
+                                </template>
+
+                                <span v-else class="text-xs text-neutral-400" title="Điểm sức khoẻ chỉ thay đổi sau mỗi lần đăng: +1 khi thành công, -5 khi lỗi.">
+                                    chưa đăng lần nào
+                                </span>
                             </div>
                         </td>
                         <td class="px-4 py-2.5 text-neutral-600">{{ account.daily_post_cap }}</td>

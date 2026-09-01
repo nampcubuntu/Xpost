@@ -309,4 +309,65 @@ class ShadowbanCheckTest extends TestCase
         // two tests passing does not make a limited account unlimited.
         $this->assertSame('restricted', $result['state']);
     }
+
+    #[Test]
+    public function the_real_payload_maps_field_for_field(): void
+    {
+        /*
+         * The response as the live API actually sent it for @MDN_Design,
+         * trimmed to the fields this reads. Frozen here because every earlier
+         * mistake in this file came from assuming a shape rather than looking
+         * at one: the count that turned out to be a page, and the reply flag
+         * that was sitting unread in every tweet.
+         */
+        $tweet = fn (bool $limited = false) => [
+            'id' => '2094682390765682991',
+            'full_text' => 'random meetup turned legendary',
+            'is_replies_limited' => $limited,
+            'is_reply' => false,
+            'view_count' => 26,
+            'user' => [
+                'username' => 'MDN_Design',
+                'tweets_count' => 119,
+                'protected' => false,
+                'possibly_sensitive' => false,
+                'verified' => false,
+            ],
+        ];
+
+        Http::fake([
+            'api.sorsa.io/v3/search-users' => Http::response([
+                'users' => [[
+                    'id' => '600940892',
+                    'username' => 'MDN_Design',
+                    'display_name' => 'MDN Design Network',
+                    'followers_count' => 80,
+                    'tweets_count' => 119,
+                    'verified' => false,
+                    'protected' => false,
+                    'possibly_sensitive' => false,
+                ]],
+                'next_cursor' => '',
+            ]),
+            'api.sorsa.io/v3/search-tweets' => Http::response([
+                'tweets' => array_fill(0, 20, $tweet()),
+                // The cursor the real response carried, which is what makes the
+                // twenty a page rather than a total.
+                'next_cursor' => 'DAADDAABCgABHRHOiUrawS8KAAIc4Lpz3ptgKw',
+            ]),
+        ]);
+
+        $result = app(ShadowbanChecker::class)->check($this->account('MDN_Design'));
+
+        $this->assertSame('ok', $result['state']);
+        $this->assertSame('ok', $result['detail']['search']);
+        $this->assertSame('ok', $result['detail']['search_suggestion']);
+        $this->assertSame('ok', $result['detail']['replies']);
+        $this->assertSame(20, $result['detail']['posts_found']);
+        $this->assertTrue($result['detail']['posts_more']);
+        $this->assertSame(119, $result['detail']['posts_total']);
+        $this->assertSame(0, $result['detail']['replies_limited']);
+        $this->assertFalse($result['detail']['protected']);
+        $this->assertFalse($result['detail']['sensitive']);
+    }
 }

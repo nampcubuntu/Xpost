@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Enums\TeamRole;
+use App\Models\ShortLink;
 use App\Models\Team;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -51,8 +52,16 @@ class LinkTenancyTest extends TestCase
             'success' => true, 'result' => [], 'result_info' => ['cursor' => ''],
         ])]);
 
-        [, $first] = $this->teamWith('aaaa1111');
-        [, $second] = $this->teamWith('bbbb2222');
+        [$firstTeam, $first] = $this->teamWith('aaaa1111');
+        [$secondTeam, $second] = $this->teamWith('bbbb2222');
+
+        /*
+         * A row each, because the page reads values only for the keys it is
+         * showing -- an empty index sends no request at all, and this test
+         * is about which namespace the request names.
+         */
+        ShortLink::create(['team_id' => $firstTeam->id, 'key' => 'r:one', 'created_at' => now()]);
+        ShortLink::create(['team_id' => $secondTeam->id, 'key' => 'r:two', 'created_at' => now()]);
 
         $this->actingAs($first)->getJson('/api/v1/links')->assertOk();
         $this->actingAs($second)->getJson('/api/v1/links')->assertOk();

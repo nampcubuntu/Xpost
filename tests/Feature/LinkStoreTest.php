@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
-use App\Models\TinyLink;
+use App\Models\ShortLink;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
@@ -23,11 +23,14 @@ class LinkStoreTest extends TestCase
 
     private $user;
 
+    private $team;
+
     protected function setUp(): void
     {
         parent::setUp();
 
-        [$team, $this->user] = $this->tenant();
+        [$this->team, $this->user] = $this->tenant();
+        $team = $this->team;
 
         /*
          * The namespace belongs to the team, not to config: a shared one lets
@@ -47,39 +50,62 @@ class LinkStoreTest extends TestCase
     public function it_lists_keys_with_their_values(): void
     {
         /*
-         * KV lists keys without values, so the page needs the values too --
-         * fetched in one bulk read rather than a request per row, which at
-         * half a second each turned an eighty-key page into a minute.
+         * The order comes from short_links; the values come from KV, for the
+         * rows on screen only. KV lists lexicographically and records nothing
+         * about when a key was written, so it cannot answer "newest first" --
+         * and reading every key to sort them is 642ms per thousand, which at
+         * three thousand links a day is a minute per page load inside a week.
          */
-        Http::fake([
-            'api.cloudflare.com/*/keys*' => Http::response([
-                'success' => true,
-                'result' => [['name' => 'r:abc'], ['name' => 'r:def']],
-                'result_info' => ['cursor' => ''],
-            ]),
-            'api.cloudflare.com/*/bulk/get' => Http::response([
-                'success' => true,
-                'result' => ['values' => [
-                    'r:abc' => 'https://img/1|https://dest/',
-                    'r:def' => 'https://img/2|https://dest/',
-                ]],
-            ]),
-        ]);
+        ShortLink::create(['team_id' => $this->team->id, 'key' => 'r:abc', 'created_at' => now()]);
+        ShortLink::create(['team_id' => $this->team->id, 'key' => 'r:def', 'created_at' => now()->subDay()]);
+
+        Http::fake(['api.cloudflare.com/*/bulk/get' => Http::response([
+            'success' => true,
+            'result' => ['values' => [
+                'r:abc' => 'https://img/1|https://dest/',
+                'r:def' => 'https://img/2|https://dest/',
+            ]],
+        ])]);
 
         $this->actingAs($this->user)
             ->getJson('/api/v1/links')
             ->assertOk()
             ->assertJsonPath('data.0.key', 'r:abc')
             ->assertJsonPath('data.0.value', 'https://img/1|https://dest/')
-            /*
-             * Pages by number now, not by cursor. This asserted `cursor` was
-             * null, which stayed green when the field went away entirely --
-             * data_get on a missing key is also null. The count is the part
-             * that cannot pass by absence.
-             */
             ->assertJsonPath('meta.total', 2)
-            ->assertJsonPath('meta.last_page', 1)
-            ->assertJsonPath('meta.complete', true);
+            ->assertJsonPath('meta.last_page', 1);
+    }
+
+    #[Test]
+    public function a_page_costs_one_cloudflare_call_however_many_links_there_are(): void
+    {
+        /*
+         * The reason the index exists. Ordering used to mean reading the whole
+         * namespace -- one request per thousand keys, on every page load, past
+         * a ceiling where the order silently stopped being true. Now it is one
+         * bulk read for the rows shown, and nothing else.
+         */
+        foreach (range(1, 120) as $n) {
+            ShortLink::create([
+                'team_id' => $this->team->id,
+                'key' => 'r:key'.str_pad((string) $n, 4, '0', STR_PAD_LEFT),
+                'created_at' => now()->subMinutes($n),
+            ]);
+        }
+
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true, 'result' => ['values' => []]])]);
+
+        $this->actingAs($this->user)->getJson('/api/v1/links?per_page=50')->assertOk();
+
+        $calls = 0;
+        Http::assertSent(function ($request) use (&$calls) {
+            $calls++;
+
+            // The key listing must not be touched at all any more.
+            return ! str_contains($request->url(), '/keys');
+        });
+
+        $this->assertSame(1, $calls, 'a page should cost exactly one bulk read');
     }
 
     #[Test]
@@ -397,127 +423,56 @@ class LinkStoreTest extends TestCase
     public function the_newest_link_is_the_first_one_listed(): void
     {
         /*
-         * The whole reason the creation time is stamped at all. KV lists
-         * lexicographically and offers a cursor, nothing else -- so without a
-         * stamp in the metadata "newest first" is not a question it can answer,
-         * and a link made today lands wherever its name happens to fall.
+         * And the undated last. Rows backfilled from a namespace that predates
+         * the creation stamp have no age -- given today's date they would sort
+         * above everything, which is the one thing a "newest first" list must
+         * not do with a year-old link.
          */
-        Http::fake([
-            'api.cloudflare.com/*/keys*' => Http::response(['success' => true, 'result' => [
-                ['name' => 'r:aaa', 'metadata' => ['created_at' => 1000]],
-                ['name' => 'r:zzz', 'metadata' => ['created_at' => 9000]],
-                ['name' => 'r:mmm'],
-            ], 'result_info' => ['cursor' => '']]),
-            'api.cloudflare.com/*' => Http::response(['success' => true, 'result' => ['values' => []]]),
-        ]);
+        ShortLink::create(['team_id' => $this->team->id, 'key' => 'r:old', 'created_at' => now()->subYear()]);
+        ShortLink::create(['team_id' => $this->team->id, 'key' => 'r:new', 'created_at' => now()]);
+        ShortLink::create(['team_id' => $this->team->id, 'key' => 'r:unknown', 'created_at' => null]);
+
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true, 'result' => ['values' => []]])]);
 
         $rows = $this->actingAs($this->user)->getJson('/api/v1/links')->assertOk()->json('data');
 
-        // Newest first, and the one with no stamp last rather than guessed at.
-        $this->assertSame(['r:zzz', 'r:aaa', 'r:mmm'], array_column($rows, 'key'));
-        $this->assertNotNull($rows[0]['created_at']);
+        $this->assertSame(['r:new', 'r:old', 'r:unknown'], array_column($rows, 'key'));
         $this->assertNull($rows[2]['created_at']);
     }
 
     #[Test]
-    public function a_namespace_too_large_to_sort_says_so(): void
+    public function adding_and_deleting_keep_the_index_in_step(): void
     {
-        /*
-         * Past the sweep's ceiling the sort can only see what it read, so
-         * "newest first" becomes newest-of-some -- which looks exactly like the
-         * truth. The page is told, rather than being handed a quiet truncation.
-         */
-        Http::fake([
-            'api.cloudflare.com/*/keys*' => Http::response(['success' => true, 'result' => [
-                ['name' => 'r:aaa', 'metadata' => ['created_at' => 1000]],
-            ], 'result_info' => ['cursor' => 'more-to-come']]),
-            'api.cloudflare.com/*' => Http::response(['success' => true, 'result' => ['values' => []]]),
-        ]);
+        // An index nothing maintains is a list of links that no longer exist
+        // beside an absence of the ones that do.
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true])]);
 
-        $meta = $this->actingAs($this->user)->getJson('/api/v1/links')->assertOk()->json('meta');
+        $key = $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['value' => 'https://a|https://b'])
+            ->assertCreated()
+            ->json('data.key');
 
-        $this->assertFalse($meta['complete']);
-    }
-
-    #[Test]
-    public function a_page_is_shortened_in_one_go_rather_than_one_at_a_time(): void
-    {
-        /*
-         * Measured at 315ms per call against the live endpoint, so a page of
-         * fifty held the request for sixteen seconds -- and `artisan serve`
-         * handles one request at a time, which made that sixteen seconds of the
-         * whole application.
-         */
-        config(['xpost.links.tinyurl.enabled' => true, 'xpost.links.tinyurl.token' => '']);
-
-        Http::fake([
-            'tinyurl.com/api-create.php*' => Http::sequence()
-                ->push('https://tinyurl.com/aaa')
-                ->push('https://tinyurl.com/bbb'),
-            'api.cloudflare.com/*' => Http::response(['success' => true]),
-        ]);
-
-        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
+        $this->assertSame(1, ShortLink::query()->where('key', $key)->count());
 
         $this->actingAs($this->user)
-            ->postJson('/api/v1/links/shorten', ['keys' => ['r:one', 'r:two']])
-            ->assertOk()
-            ->assertJsonPath('data.r:one', 'https://tinyurl.com/aaa')
-            ->assertJsonPath('data.r:two', 'https://tinyurl.com/bbb');
+            ->deleteJson('/api/v1/links', ['key' => $key])
+            ->assertNoContent();
+
+        $this->assertSame(0, ShortLink::query()->where('key', $key)->count());
     }
 
     #[Test]
-    public function a_link_already_shortened_is_not_shortened_again(): void
+    public function a_bulk_paste_indexes_every_pair_in_one_statement(): void
     {
-        /*
-         * Asking twice mints a second code, and a post already carrying the
-         * first becomes untraceable -- two live links to the same place and
-         * nothing saying which is in use where.
-         */
-        config(['xpost.links.tinyurl.enabled' => true, 'xpost.links.tinyurl.token' => '']);
+        // This endpoint takes a thousand pairs, and a thousand inserts would be
+        // a thousand round trips to record what one already has.
+        Http::fake(['api.cloudflare.com/*' => Http::response(['success' => true])]);
 
-        Http::fake([
-            'tinyurl.com/api-create.php*' => Http::response('https://tinyurl.com/once'),
-            'api.cloudflare.com/*' => Http::response(['success' => true]),
-        ]);
+        $this->actingAs($this->user)->postJson('/api/v1/links/bulk', ['pairs' => [
+            ['key' => 'one', 'value' => 'https://a'],
+            ['key' => 'two', 'value' => 'https://b'],
+        ]])->assertOk();
 
-        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
-
-        $first = $this->actingAs($this->user)
-            ->postJson('/api/v1/links/shorten', ['keys' => ['r:same']])->json('data.r:same');
-
-        $second = $this->actingAs($this->user)
-            ->postJson('/api/v1/links/shorten', ['keys' => ['r:same']])->json('data.r:same');
-
-        $this->assertSame($first, $second);
-        $this->assertSame(1, TinyLink::query()->count(), 'a second code was minted for the same link');
-    }
-
-    #[Test]
-    public function one_refusal_does_not_take_the_rest_of_the_page_with_it(): void
-    {
-        // The endpoint answers the word "Error" with a 200, so the body has to
-        // be read rather than the status -- and one bad answer is one empty
-        // cell, not a failed page.
-        config(['xpost.links.tinyurl.enabled' => true, 'xpost.links.tinyurl.token' => '']);
-
-        Http::fake([
-            'tinyurl.com/api-create.php*' => Http::sequence()
-                ->push('Error')
-                ->push('https://tinyurl.com/fine'),
-            'api.cloudflare.com/*' => Http::response(['success' => true]),
-        ]);
-
-        $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
-
-        $this->actingAs($this->user)
-            ->postJson('/api/v1/links/shorten', ['keys' => ['r:bad', 'r:good']])
-            ->assertOk()
-            ->assertJsonPath('data.r:bad', null)
-            ->assertJsonPath('data.r:good', 'https://tinyurl.com/fine');
-
-        // The failure left no row, so the next attempt tries again rather than
-        // caching the absence.
-        $this->assertSame(1, TinyLink::query()->count());
+        $this->assertSame(['r:one', 'r:two'], ShortLink::query()->orderBy('key')->pluck('key')->all());
     }
 }

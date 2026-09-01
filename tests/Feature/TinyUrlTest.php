@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\ShortLink;
 use App\Models\TinyLink;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -146,6 +147,16 @@ class TinyUrlTest extends TestCase
             ]),
             'api.cloudflare.com/*/values/*' => Http::response('https://a|https://b'),
         ]);
+
+        // The list orders from the index now, so the rows have to exist
+        // there -- a faked key listing is no longer what the page reads.
+        foreach (['r:abc' => 1, 'r:def' => 2] as $key => $age) {
+            ShortLink::create([
+                'team_id' => $this->user->current_team_id,
+                'key' => $key,
+                'created_at' => now()->subMinutes($age),
+            ]);
+        }
 
         // Stated rather than inherited: the tenant context is cleared when a
         // request ends, so nothing outside one has a team unless it says so.

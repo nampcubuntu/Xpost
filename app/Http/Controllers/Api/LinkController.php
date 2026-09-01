@@ -7,10 +7,11 @@ namespace App\Http\Controllers\Api;
 use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
 use App\Models\LinkDomain;
+use App\Models\ShortLink;
 use App\Models\Team;
 use App\Services\Links\CloudflareKvClient;
 use App\Services\Links\TinyUrlService;
-use Carbon\CarbonImmutable;
+use App\Support\TeamContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -51,45 +52,25 @@ class LinkController extends Controller
         $perPage = min(max((int) $request->query('per_page', 50), 1), 100);
         $page = max((int) $request->query('page', 1), 1);
 
-        try {
-            /*
-             * Every key, then sorted, then one page of it.
-             *
-             * KV lists lexicographically and offers a cursor, nothing else --
-             * so "newest first" cannot be asked of it. Sorting a single cursor
-             * page would put a link made today under one made last year purely
-             * because of where the cursor happened to fall.
-             *
-             * The listing carries names and metadata but no values, so reading
-             * all of it costs one request per thousand keys, and the values are
-             * still fetched only for the rows this page shows.
-             */
-            $all = $this->kv->listAllKeys($request->query('prefix') ?: null);
-        } catch (XApiException $e) {
-            return response()->json(['message' => $e->getMessage()], 422);
-        }
-
-        $keys = $all['keys'];
-
         /*
-         * Newest first, and the undated last.
+         * Ordered here, not at Cloudflare.
          *
-         * created_at lives in the key's metadata and is stamped on write, so
-         * anything written before that existed has none. Those sort to the
-         * bottom by name rather than being guessed at -- a made-up date on an
-         * old link would be worse than an empty cell.
+         * KV lists lexicographically and records nothing about when a key was
+         * written, so newest-first was built by reading every key and sorting
+         * the lot. That is one 642ms request per thousand keys -- fine at
+         * eighty, and at three thousand links a day it is a minute of round
+         * trips per page load inside a week, past a ceiling where the ordering
+         * silently stops being true.
+         *
+         * short_links holds the key and its age and nothing else. The value is
+         * still read from KV, for this page only.
          */
-        usort($keys, function (array $a, array $b): int {
-            if ($a['created_at'] === $b['created_at']) {
-                return strcmp($a['name'], $b['name']);
-            }
+        $indexed = ShortLink::query()
+            ->keyPrefix($request->query('prefix'))
+            ->newestFirst()
+            ->paginate($perPage, ['key', 'created_at'], 'page', $page);
 
-            return ($b['created_at'] ?? PHP_INT_MIN) <=> ($a['created_at'] ?? PHP_INT_MIN);
-        });
-
-        $total = count($keys);
-        $slice = array_slice($keys, ($page - 1) * $perPage, $perPage);
-        $names = array_column($slice, 'name');
+        $names = $indexed->pluck('key')->all();
 
         /*
          * KV lists keys without their values, so the page needs a read per row.
@@ -98,31 +79,32 @@ class LinkController extends Controller
          * before the table appeared. The bulk endpoint answers the whole page
          * in one.
          */
-        $values = $this->kv->getMany($names);
+        try {
+            $values = $names === [] ? [] : $this->kv->getMany($names);
+        } catch (XApiException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
-        $rows = array_map(fn (array $key) => [
-            'key' => $key['name'],
-            // Absent rather than null-checked: a key listed a moment ago and
-            // gone by the read is a race, not an error, and an empty cell says
-            // so better than a failed page.
-            'value' => $values[$key['name']] ?? null,
-            'created_at' => $key['created_at']
-                ? CarbonImmutable::createFromTimestamp($key['created_at'])->toIso8601String()
-                : null,
-        ], $slice);
-
+        $rows = $indexed->map(fn (ShortLink $link) => [
+            'key' => $link->key,
+            /*
+             * Absent rather than null-checked. A key deleted from Cloudflare by
+             * someone else leaves a row here whose value comes back empty --
+             * the same empty cell a key removed between the list and the read
+             * has always produced.
+             */
+            'value' => $values[$link->key] ?? null,
+            'created_at' => $link->created_at?->toIso8601String(),
+        ])->all();
         $domains = $this->domainList();
 
         return response()->json([
             'data' => $this->withTinyLinks($rows, $domains),
             'meta' => [
-                'current_page' => $page,
-                'last_page' => max(1, (int) ceil($total / $perPage)),
-                'per_page' => $perPage,
-                'total' => $total,
-                // False when the namespace holds more keys than the sweep will
-                // read. Said rather than silently truncated.
-                'complete' => $all['complete'],
+                'current_page' => $indexed->currentPage(),
+                'last_page' => $indexed->lastPage(),
+                'per_page' => $indexed->perPage(),
+                'total' => $indexed->total(),
             ],
             'domains' => $domains,
             'tinyurl_enabled' => $this->tiny->isEnabled(),
@@ -320,6 +302,11 @@ class LinkController extends Controller
 
         try {
             $this->kv->put($key, $value);
+
+            // Indexed after the write, never before: a row for a key that
+            // failed to land would be a link the page offers and the Worker
+            // cannot resolve.
+            ShortLink::remember((int) TeamContext::id(), $key);
         } catch (XApiException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -461,7 +448,28 @@ class LinkController extends Controller
         }
 
         try {
-            return response()->json(['written' => $this->kv->putMany($pairs)]);
+            $written = $this->kv->putMany($pairs);
+
+            /*
+             * The whole paste in one statement rather than a row at a time:
+             * this endpoint takes a thousand pairs, and a thousand inserts
+             * is a thousand round trips to record what one already has.
+             */
+            $now = now();
+            $teamId = (int) TeamContext::id();
+
+            ShortLink::query()->upsert(
+                array_map(
+                    fn (string $key) => ['team_id' => $teamId, 'key' => $key, 'created_at' => $now, 'updated_at' => $now],
+                    array_keys($pairs),
+                ),
+                ['team_id', 'key'],
+                // Only the timestamp is touched on a repeat, and the age is
+                // left alone: rewriting a value does not make a link new.
+                ['updated_at'],
+            );
+
+            return response()->json(['written' => $written]);
         } catch (XApiException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
@@ -479,6 +487,10 @@ class LinkController extends Controller
 
         try {
             $this->kv->delete($data['key']);
+
+            ShortLink::query()
+                ->where('key', $data['key'])
+                ->delete();
         } catch (XApiException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }

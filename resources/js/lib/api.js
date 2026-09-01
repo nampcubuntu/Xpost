@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { forgetAll } from './cache';
 
 /**
  * Sanctum cookie auth: the SPA and the API share a session, so every request
@@ -36,7 +37,26 @@ api.interceptors.request.use(async (config) => {
 });
 
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        /*
+         * A write invalidates every cached list.
+         *
+         * Done here rather than at each call site, because the call sites are
+         * the thing that gets forgotten: a page grows a new action, nobody adds
+         * the matching forget(), and the symptom is a deleted row reappearing
+         * for a second on the next visit. There is no version of that bug worth
+         * the cache hits it would save.
+         *
+         * Everything, not just the caller's own key: a proxy assignment changes
+         * the accounts page, deleting an app changes the accounts on it, and
+         * guessing which lists a write touches is the same mistake one level up.
+         */
+        if (! ['get', 'head', 'options'].includes(response.config?.method ?? 'get')) {
+            forgetAll();
+        }
+
+        return response;
+    },
     (error) => {
         const status = error.response?.status;
 

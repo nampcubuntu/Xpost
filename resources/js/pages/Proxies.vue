@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import api, { validationErrors } from '../lib/api';
+import { cached, swr } from '../lib/cache';
 
 const proxies = ref([]);
 const showBulk = ref(false);
@@ -46,16 +47,19 @@ const healthClass = {
 };
 
 async function load() {
-    loading.value = true;
+    // Last answer first, then the true one: arriving at a page that has not
+    // changed should not mean staring at an empty table while it is proved.
+    loading.value = cached('proxies') === undefined;
 
     try {
-        const { data } = await api.get('proxies');
-        proxies.value = data.data;
+        await swr('proxies', async () => (await api.get('proxies')).data, (data) => {
+            proxies.value = data.data;
 
-        // Drop anything that has since been deleted, or the count in the
-        // action bar promises rows the next action cannot find.
-        const live = new Set(proxies.value.map((proxy) => proxy.id));
-        selected.value = new Set([...selected.value].filter((id) => live.has(id)));
+            // Drop anything that has since been deleted, or the count in the
+            // action bar promises rows the next action cannot find.
+            const live = new Set(proxies.value.map((proxy) => proxy.id));
+            selected.value = new Set([...selected.value].filter((id) => live.has(id)));
+        });
     } finally {
         loading.value = false;
     }

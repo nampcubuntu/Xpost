@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import api from '../lib/api';
+import { cached, swr } from '../lib/cache';
 import NavIcon from '../components/NavIcon.vue';
 
 /*
@@ -185,18 +186,35 @@ const bulkCount = computed(() => bulkText.value
     .length);
 
 async function load(nextCursor = null) {
-    loading.value = true;
+    /*
+     * The last answer first, then the true one.
+     *
+     * This page is the slowest to arrive at -- a Cloudflare round trip on top
+     * of the tunnel -- and it was clearing the table to "Đang tải…" every time,
+     * for rows that had almost always not changed. Showing them straight away
+     * costs being one navigation stale for about a second.
+     */
+    const key = `links:${prefix.value ?? ''}:${nextCursor ?? ''}`;
 
-    try {
-        const { data } = await api.get('links', {
-            params: { prefix: prefix.value || undefined, cursor: nextCursor || undefined },
-        });
-
+    const apply = (data) => {
         rows.value = data.data;
         cursor.value = data.cursor;
         domains.value = data.domains ?? [];
         tinyEnabled.value = data.tinyurl_enabled === true;
         configured.value = true;
+    };
+
+    // A spinner only when there is nothing to show instead of one.
+    loading.value = cached(key) === undefined;
+
+    try {
+        await swr(key, async () => {
+            const { data } = await api.get('links', {
+                params: { prefix: prefix.value || undefined, cursor: nextCursor || undefined },
+            });
+
+            return data;
+        }, apply);
     } catch (error) {
         configured.value = error.response?.data?.configured !== false;
         rows.value = [];
@@ -233,7 +251,6 @@ async function addEntry() {
             key: newKey.value.trim() || undefined,
             value: newValue.value.trim(),
         });
-
         flash.value = { type: 'ok', message: `Đã thêm ${data.data.key}.` };
         newKey.value = '';
         newValue.value = '';

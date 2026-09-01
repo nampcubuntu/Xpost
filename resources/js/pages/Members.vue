@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import api from '../lib/api';
+import { cached, swr } from '../lib/cache';
 import { useAuthStore } from '../stores/auth';
 
 /*
@@ -30,16 +31,19 @@ const canManage = computed(() => auth.can('manage_accounts'));
 const assignableRoles = computed(() => roles.value.filter((role) => role.assignable));
 
 async function load() {
-    loading.value = true;
+    // Last answer first, then the true one: arriving at a page that has not
+    // changed should not mean staring at an empty table while it is proved.
+    loading.value = cached('members') === undefined;
 
     try {
-        const { data } = await api.get('members');
-        members.value = data.data;
-        roles.value = data.roles;
-        teams.value = data.teams ?? [];
-        // Only the operator's view spans teams, so only it needs the column.
-        spansTeams.value = data.spans_teams === true;
-        newTeam.value ??= teams.value[0]?.id ?? null;
+        await swr('members', async () => (await api.get('members')).data, (data) => {
+            members.value = data.data;
+            roles.value = data.roles;
+            teams.value = data.teams ?? [];
+            // Only the operator's view spans teams, so only it needs the column.
+            spansTeams.value = data.spans_teams === true;
+            newTeam.value ??= teams.value[0]?.id ?? null;
+        });
     } finally {
         loading.value = false;
     }

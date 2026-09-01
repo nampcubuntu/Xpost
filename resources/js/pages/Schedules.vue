@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useAuthStore } from '../stores/auth';
 import api, { validationErrors } from '../lib/api';
+import { cached, swr } from '../lib/cache';
 import AudiencePicker from '../components/AudiencePicker.vue';
 import TimezoneSelect from '../components/TimezoneSelect.vue';
 
@@ -89,11 +90,14 @@ const newTime = ref('09:00');
 const perAccountLocal = computed(() => form.template.schedule_mode === 'per_account_timezone');
 
 async function load() {
-    loading.value = true;
+    // Last answer first, then the true one: arriving at a page that has not
+    // changed should not mean staring at an empty table while it is proved.
+    loading.value = cached('schedules') === undefined;
 
     try {
-        const { data } = await api.get('schedules');
-        schedules.value = data.data;
+        await swr('schedules', async () => (await api.get('schedules')).data, (data) => {
+            schedules.value = data.data;
+        });
     } finally {
         loading.value = false;
     }

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue';
 import api, { validationErrors } from '../lib/api';
+import { cached, swr } from '../lib/cache';
 
 const apps = ref([]);
 
@@ -37,11 +38,14 @@ const otherErrors = computed(() => Object.entries(errors.value)
     .map(([, message]) => message));
 
 async function load() {
-    loading.value = true;
+    // Last answer first, then the true one: arriving at a page that has not
+    // changed should not mean staring at an empty table while it is proved.
+    loading.value = cached('apps') === undefined;
 
     try {
-        const { data } = await api.get('apps');
-        apps.value = data.data;
+        await swr('apps', async () => (await api.get('apps')).data, (data) => {
+            apps.value = data.data;
+        });
     } finally {
         loading.value = false;
     }

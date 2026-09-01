@@ -799,19 +799,24 @@ const destinationHost = (url) => {
                     button beside it and competing with the one black element in
                     the header.
 
-                    Quiet by default and loud only when it matters: transparent
-                    at first, tinted once the ceiling is close. The padding is
-                    always there so gaining a background does not shift the row.
+                    Quiet by default and loud only when the money is actually
+                    running out: nothing behind it until 80% of the ceiling,
+                    then the lightest tint that still reads on #f7f9f9. The
+                    padding is there in every state, so gaining a background
+                    does not shift the row.
+
+                    No ceiling is not an emergency, it is an unfinished
+                    setting, so it tints nothing -- the warning and the black
+                    button carry it, and the black is the one the page already
+                    uses for "this is the button".
                 -->
                 <div
                     class="rounded-lg px-3 py-1 text-right transition-colors"
-                    :class="budget.budget_usd === null
-                        ? 'bg-amber-100/70'
-                        : budgetPercent >= 100
-                            ? 'bg-red-100/70'
-                            : budgetPercent >= 80
-                                ? 'bg-amber-100/70'
-                                : ''"
+                    :class="budgetPercent >= 100
+                        ? 'bg-red-50'
+                        : budgetPercent >= 80
+                            ? 'bg-amber-50'
+                            : ''"
                 >
                     <div class="flex items-baseline justify-end gap-2">
                         <span class="text-[10.5px] font-medium uppercase tracking-wider text-neutral-500">
@@ -883,7 +888,7 @@ const destinationHost = (url) => {
                             v-if="auth.can('manage_budget')"
                             class="text-[11px] font-medium transition"
                             :class="budget.budget_usd === null
-                                ? 'rounded-md bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-800'
+                                ? 'rounded-md bg-neutral-900 px-2 py-0.5 text-white hover:bg-neutral-700'
                                 : 'text-blue-600 hover:underline'"
                             @click="startEditBudget"
                         >

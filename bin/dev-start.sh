@@ -84,6 +84,35 @@ for service in "MySQL:3307" "Redis:6380"; do
     exit 1
 done
 
+say "Tài nguyên giao diện"
+
+# A hot file behind an https APP_URL is a blank page, every time.
+#
+# `npm run dev` writes public/hot, and @vite then points the page at
+# http://localhost:5173 instead of the built files. Served over the tunnel that
+# is mixed content, so the browser refuses every asset without saying so: HTTP
+# 200, a full HTML document, and nothing on screen. It is also left behind when
+# Vite is killed rather than stopped, so the page stays blank with no dev server
+# anywhere to explain it.
+#
+# Only when APP_URL is https. On localhost the hot file is doing its job.
+APP_URL_CHECK=$(grep -E '^APP_URL=' .env | cut -d= -f2-)
+
+if [[ -f public/hot && $APP_URL_CHECK == https://* ]]; then
+    rm -f public/hot
+    ok "đã xoá public/hot (Vite dev không dùng được sau tunnel https)"
+elif [[ -f public/hot ]]; then
+    skip "public/hot còn — Vite dev, hợp lệ với APP_URL http"
+else
+    skip "public/hot sạch"
+fi
+
+if [[ ! -f public/build/manifest.json ]]; then
+    fail "chưa có public/build/manifest.json — chạy: npm run build"
+else
+    ok "đã có bản build"
+fi
+
 say "Máy chủ web"
 
 if running php.exe "artisan serve"; then

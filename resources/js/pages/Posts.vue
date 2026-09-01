@@ -303,7 +303,6 @@ const budgetTone = computed(() => {
         return {
             amount: 'text-red-700',
             bar: 'bg-red-600',
-            badge: 'bg-red-600 text-white',
             remaining: 'font-medium text-red-700',
         };
     }
@@ -312,7 +311,6 @@ const budgetTone = computed(() => {
         return {
             amount: 'text-amber-800',
             bar: 'bg-amber-500',
-            badge: 'bg-amber-500 text-white',
             remaining: 'font-medium text-amber-800',
         };
     }
@@ -320,7 +318,6 @@ const budgetTone = computed(() => {
     return {
         amount: 'text-neutral-900',
         bar: 'bg-neutral-900',
-        badge: 'bg-neutral-100 text-neutral-600',
         remaining: 'text-neutral-500',
     };
 });
@@ -797,52 +794,40 @@ const destinationHost = (url) => {
                 <!--
                     Today's spend, next to the button that creates more of it.
 
-                    A card rather than a line of grey text: this is the only
-                    number on the page that costs money, and it was reading as a
-                    caption next to the thing that spends it.
+                    No card. The page is #f7f9f9 and a white box with a border
+                    sat on top of it like something pasted on, taller than the
+                    button beside it and competing with the one black element in
+                    the header.
+
+                    Quiet by default and loud only when it matters: transparent
+                    at first, tinted once the ceiling is close. The padding is
+                    always there so gaining a background does not shift the row.
                 -->
                 <div
-                    class="rounded-xl border px-3.5 py-2.5 transition-colors"
+                    class="rounded-lg px-3 py-1 text-right transition-colors"
                     :class="budget.budget_usd === null
-                        ? 'border-amber-300 bg-amber-50'
+                        ? 'bg-amber-100/70'
                         : budgetPercent >= 100
-                            ? 'border-red-300 bg-red-50'
+                            ? 'bg-red-100/70'
                             : budgetPercent >= 80
-                                ? 'border-amber-300 bg-amber-50'
-                                : 'border-neutral-200 bg-white'"
+                                ? 'bg-amber-100/70'
+                                : ''"
                 >
-                    <div class="flex items-center justify-between gap-6">
-                        <p class="text-[10.5px] font-medium uppercase tracking-wider text-neutral-500">
-                            Chi tiêu hôm nay
-                        </p>
+                    <div class="flex items-baseline justify-end gap-2">
+                        <span class="text-[10.5px] font-medium uppercase tracking-wider text-neutral-500">
+                            Hôm nay
+                        </span>
 
-                        <!-- The share of the ceiling already gone, as a number
-                             rather than only as a length of bar. -->
-                        <span
-                            v-if="budget.budget_usd !== null"
-                            class="rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums"
-                            :class="budgetTone.badge"
-                        >{{ budgetPercent }}%</span>
-                    </div>
-
-                    <p class="mt-1 flex items-baseline gap-1.5">
-                        <span class="text-[22px] font-semibold leading-none tabular-nums" :class="budgetTone.amount">
+                        <span class="text-[17px] font-semibold leading-none tabular-nums" :class="budgetTone.amount">
                             ${{ budget.spent_usd.toFixed(2) }}
                         </span>
-                        <span v-if="budget.budget_usd !== null" class="text-[13px] text-neutral-400 tabular-nums">
+
+                        <span v-if="budget.budget_usd !== null" class="text-[12px] tabular-nums text-neutral-400">
                             / ${{ budget.budget_usd.toFixed(2) }}
                         </span>
-                    </p>
-
-                    <div v-if="budget.budget_usd !== null" class="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-200/80">
-                        <div
-                            class="h-full rounded-full transition-[width] duration-500"
-                            :class="budgetTone.bar"
-                            :style="{ width: `${Math.max(budgetPercent, budget.spent_usd > 0 ? 2 : 0)}%` }"
-                        ></div>
                     </div>
 
-                    <form v-if="editingBudget" class="mt-2 flex items-center gap-1.5" @submit.prevent="saveBudget">
+                    <form v-if="editingBudget" class="mt-1 flex items-center justify-end gap-1.5" @submit.prevent="saveBudget">
                         <div class="relative">
                             <span class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[12px] text-neutral-400">$</span>
                             <input
@@ -850,43 +835,49 @@ const destinationHost = (url) => {
                                 type="number"
                                 step="0.01"
                                 min="0"
-                                autofocus
-                                class="xp-field w-28 py-1 pl-5 text-[12px] tabular-nums"
+                                class="xp-field w-24 py-0.5 pl-5 text-[12px] tabular-nums"
                                 placeholder="không giới hạn"
                             >
                         </div>
-                        <button class="xp-btn-primary px-2.5 py-1 text-[12px]" :disabled="busy === 'budget'">Lưu</button>
-                        <button type="button" class="xp-btn-ghost px-2 py-1 text-[12px]" @click="editingBudget = false">Huỷ</button>
+                        <button class="text-[12px] font-medium text-blue-600 hover:underline" :disabled="busy === 'budget'">Lưu</button>
+                        <button type="button" class="text-[12px] text-neutral-500 hover:underline" @click="editingBudget = false">Huỷ</button>
                     </form>
 
-                    <div v-else class="mt-2 flex items-center justify-between gap-4">
-                        <!-- What is left, said as an amount. A percentage is not
-                             what anyone budgets in. -->
-                        <p v-if="budget.budget_usd !== null" class="text-[11.5px] tabular-nums" :class="budgetTone.remaining">
-                            <template v-if="budgetLeft > 0">Còn ${{ budgetLeft.toFixed(2) }}</template>
-                            <template v-else>Đã chạm trần</template>
-                        </p>
+                    <div v-else class="mt-1 flex items-center justify-end gap-2">
+                        <!-- What is left, as an amount. Nobody budgets in
+                             percentages. -->
+                        <span v-if="budget.budget_usd !== null" class="text-[11px] tabular-nums" :class="budgetTone.remaining">
+                            <template v-if="budgetLeft > 0">còn ${{ budgetLeft.toFixed(2) }}</template>
+                            <template v-else>đã chạm trần</template>
+                        </span>
 
                         <!--
-                            Said out loud rather than left as a quiet link.
-
                             No ceiling is the state where a scheduling mistake
                             bills four figures: a post with a link is $0.20, so
                             one loop across a thousand accounts is $200 before
                             anyone looks at the screen. It reads as a normal
-                            default until it is priced.
+                            default until it is priced, so it is the one state
+                            that gets said out loud.
                         -->
-                        <p v-else class="max-w-[190px] text-[11px] leading-snug text-amber-800">
-                            Chưa có trần. Một lần lên lịch nhầm chạy tới hết số dư ở X.
-                        </p>
+                        <span
+                            v-else
+                            class="text-[11px] font-medium text-amber-800"
+                            title="Một lần lên lịch nhầm chạy tới hết số dư ở X."
+                        >chưa có trần</span>
+
+                        <div v-if="budget.budget_usd !== null" class="h-1 w-20 overflow-hidden rounded-full bg-neutral-900/10">
+                            <div
+                                class="h-full rounded-full transition-[width] duration-500"
+                                :class="budgetTone.bar"
+                                :style="{ width: `${Math.max(budgetPercent, budget.spent_usd > 0 ? 3 : 0)}%` }"
+                            ></div>
+                        </div>
 
                         <!-- Spending is real money; only an admin moves the ceiling. -->
                         <button
                             v-if="auth.can('manage_budget')"
-                            class="shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium transition"
-                            :class="budget.budget_usd === null
-                                ? 'bg-amber-600 text-white hover:bg-amber-700'
-                                : 'text-blue-600 hover:bg-blue-50'"
+                            class="text-[11px] font-medium hover:underline"
+                            :class="budget.budget_usd === null ? 'text-amber-800' : 'text-blue-600'"
                             @click="startEditBudget"
                         >
                             {{ budget.budget_usd === null ? 'Đặt trần' : 'Sửa trần' }}

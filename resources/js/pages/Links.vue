@@ -188,10 +188,8 @@ function shortenPage() {
     }
 }
 
-const bulkCount = computed(() => bulkText.value
-    .split('\n')
-    .filter((line) => line.includes('=') || line.includes('\t'))
-    .length);
+/** What will actually be written, not how many lines were typed. */
+const bulkCount = computed(() => parseBulk().pairs.length);
 
 async function load() {
     /*
@@ -279,24 +277,40 @@ async function addEntry() {
  * spreadsheet column pastes straight in.
  */
 function parseBulk() {
-    return bulkText.value
+    const pairs = [];
+    const skipped = [];
+
+    bulkText.value
         .split('\n')
         .map((line) => line.trim())
         .filter(Boolean)
-        .map((line) => {
+        .forEach((line) => {
             const at = line.includes('\t') ? line.indexOf('\t') : line.indexOf('=');
+            const key = at === -1 ? '' : line.slice(0, at).trim();
+            const value = at === -1 ? '' : line.slice(at + 1).trim();
 
-            return at === -1
-                ? null
-                : { key: line.slice(0, at).trim(), value: line.slice(at + 1).trim() };
-        })
-        .filter((pair) => pair && pair.key && pair.value);
+            /*
+             * Kept, not dropped.
+             *
+             * A paste is three thousand lines. Twelve that could not be read,
+             * silently discarded, leaves someone holding "đã ghi 2.988" with no
+             * way to find which twelve -- and the proxy importer already
+             * learned that lesson the hard way.
+             */
+            if (key && value) {
+                pairs.push({ key, value });
+            } else {
+                skipped.push(line);
+            }
+        });
+
+    return { pairs, skipped };
 }
 
 async function addBulk() {
-    const pairs = parseBulk();
+    const { pairs, skipped } = parseBulk();
 
-    if (!pairs.length) {
+    if (! pairs.length) {
         flash.value = { type: 'error', message: 'Chưa nhận ra dòng nào. Mỗi dòng: key = value' };
 
         return;
@@ -306,9 +320,22 @@ async function addBulk() {
 
     try {
         const { data } = await api.post('links/bulk', { pairs });
-        flash.value = { type: 'ok', message: `Đã ghi ${data.written} cặp.` };
-        bulkText.value = '';
-        showBulk.value = false;
+
+        flash.value = skipped.length
+            ? {
+                type: 'error',
+                message: `Đã ghi ${data.written} cặp. ${skipped.length} dòng không đọc được `
+                    + 'và được giữ lại trong ô để sửa — mỗi dòng cần "key = value" hoặc key<tab>value.',
+            }
+            : { type: 'ok', message: `Đã ghi ${data.written} cặp.` };
+
+        /*
+         * The unreadable lines stay in the box, alone, so they can be fixed and
+         * sent again. Clearing the whole paste would leave someone holding a
+         * count of failures with no way to find them.
+         */
+        bulkText.value = skipped.join('\n');
+        showBulk.value = skipped.length > 0;
         await load();
     } catch (error) {
         flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không ghi được.' };

@@ -538,6 +538,59 @@ class ShadowbanCheckTest extends TestCase
     }
 
     #[Test]
+    public function a_spent_quota_stops_the_rest_of_the_sweep(): void
+    {
+        /*
+         * The twelfth handle came back 403 -- the plan out of requests -- and
+         * the remaining forty-nine each went on to spend two more against the
+         * same wall. Ninety-eight requests that could not have worked, and the
+         * allowance they burned is what the list needs after a reset.
+         *
+         * A 403 is Sorsa talking about the account, not about the handle, so it
+         * settles every check behind it.
+         */
+        Http::fake(['api.sorsa.io/*' => Http::response(['message' => 'request limit exceeded'], 403)]);
+
+        $first = $this->row(['handle' => 'first_one']);
+        $second = $this->row(['handle' => 'second_one']);
+
+        (new CheckAccountVisibility($first->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+
+        $spent = count(Http::recorded());
+
+        (new CheckAccountVisibility($second->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+
+        $this->assertCount($spent, Http::recorded(), 'the sweep kept asking after the plan ran out');
+
+        // And the row behind the wall still says why, rather than going blank
+        // or looking like it was never checked.
+        $second->refresh();
+        $this->assertSame('unknown', $second->state);
+        $this->assertNotNull($second->checked_at);
+        $this->assertStringContainsString('request limit exceeded', $second->detail['error']);
+    }
+
+    #[Test]
+    public function a_handle_that_simply_failed_does_not_stop_the_sweep(): void
+    {
+        // Only a spent quota is the account's problem. One handle timing out or
+        // a 500 says nothing about the next one, and treating it as a wall
+        // would abandon a list over a single blip.
+        Http::fake(['api.sorsa.io/*' => Http::response(['message' => 'boom'], 500)]);
+
+        $first = $this->row(['handle' => 'first_one']);
+        $second = $this->row(['handle' => 'second_one']);
+
+        (new CheckAccountVisibility($first->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+
+        $spent = count(Http::recorded());
+
+        (new CheckAccountVisibility($second->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+
+        $this->assertGreaterThan($spent, count(Http::recorded()), 'a single failure stopped the whole list');
+    }
+
+    #[Test]
     public function another_teams_handles_are_not_listed(): void
     {
         // The list is per team: two teams watching the same handle are two

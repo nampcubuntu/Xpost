@@ -10,6 +10,7 @@ use App\Support\TeamContext;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\ThrottlesExceptions;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Redis;
 use Throwable;
 
@@ -28,6 +29,15 @@ class CheckAccountVisibility implements ShouldQueue
     use Queueable;
 
     public int $tries = 2;
+
+    /**
+     * Set once Sorsa says the plan is out of requests.
+     *
+     * Shared across workers rather than held per job, because the limit is
+     * the account's, not this handle's. Short-lived so a sweep started
+     * after the allowance resets is not held down by an old refusal.
+     */
+    private const LIMIT_KEY = 'sorsa:limit-reached';
 
     public function __construct(
         public readonly int $checkId,
@@ -62,6 +72,21 @@ class CheckAccountVisibility implements ShouldQueue
             }
 
             /*
+             * The quota is gone, so this call is spent before it is made.
+             *
+             * Without this the twelfth handle's 403 was followed by forty-
+             * nine more sweeps into the same wall, ninety-eight requests
+             * that could not have worked -- and the allowance those would
+             * have bought back is the difference between finishing the list
+             * after a reset and not.
+             */
+            if (is_string($reason = Cache::get(self::LIMIT_KEY))) {
+                $this->recordUnclear($row->id, $reason);
+
+                return;
+            }
+
+            /*
              * Two requests per handle against a flat twenty a second, so ten
              * handles a second across the whole install. Redis-backed rather
              * than per-worker: Horizon runs several, and a local counter would
@@ -79,6 +104,12 @@ class CheckAccountVisibility implements ShouldQueue
                         'checked_at' => $result['checked_at'],
                         'detail' => $result['detail'],
                     ])->save();
+
+                    // 403 is Sorsa saying the plan is out, not this handle
+                    // being unreachable, so it settles the whole sweep.
+                    if (str_contains((string) ($result['detail']['error'] ?? ''), 'Sorsa 403')) {
+                        Cache::put(self::LIMIT_KEY, $result['detail']['error'], now()->addMinutes(10));
+                    }
                 }, function (): void {
                     /*
                      * Could not get a slot within the block window. Released
@@ -101,17 +132,24 @@ class CheckAccountVisibility implements ShouldQueue
      */
     public function failed(Throwable $e): void
     {
-        TeamContext::runAs($this->teamId, function () use ($e): void {
-            VisibilityCheck::query()->whereKey($this->checkId)->update([
-                'state' => 'unknown',
-                'checked_at' => now(),
-                'detail' => json_encode([
-                    'search' => 'unknown',
-                    'search_suggestion' => 'unknown',
-                    'replies' => 'unknown',
-                    'error' => class_basename($e).': '.$e->getMessage(),
-                ]),
-            ]);
-        });
+        TeamContext::runAs($this->teamId, fn () => $this->recordUnclear(
+            $this->checkId,
+            class_basename($e).': '.$e->getMessage(),
+        ));
+    }
+
+    /** No verdict, and the reason there is none. */
+    private function recordUnclear(int $id, string $reason): void
+    {
+        VisibilityCheck::query()->whereKey($id)->update([
+            'state' => 'unknown',
+            'checked_at' => now(),
+            'detail' => json_encode([
+                'search' => 'unknown',
+                'search_suggestion' => 'unknown',
+                'replies' => 'unknown',
+                'error' => $reason,
+            ]),
+        ]);
     }
 }

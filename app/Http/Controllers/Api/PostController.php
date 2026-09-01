@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Console\Commands\DispatchDueTargets;
+use App\Enums\DestinationType;
 use App\Enums\PostStatus;
 use App\Enums\TargetStatus;
 use App\Enums\TeamRole;
@@ -52,6 +53,23 @@ class PostController extends Controller
             ])
             ->status($request->query('status'))
             ->type($request->query('type'))
+            ->forAccount($request->integer('account_id') ?: null)
+            /*
+             * The checkbox groups behind "Bộ lọc".
+             *
+             * Everything ticked and nothing ticked mean the same thing, so a
+             * full set is left off the query rather than spelled out -- opening
+             * the panel and closing it again must not change the result.
+             */
+            ->when(
+                $this->narrowing($request, 'destinations', DestinationType::cases()),
+                fn ($q, array $list) => $q->whereIn('destination_type', $list)
+            )
+            ->when(
+                $this->narrowing($request, 'statuses', PostStatus::cases()),
+                fn ($q, array $list) => $q->whereIn('status', $list)
+            )
+            ->withMedia((array) $request->input('media', []))
             ->when($request->query('campaign_id'), fn ($q, $id) => $q->where('campaign_id', $id))
             ->when($request->query('search'), fn ($q, $term) => $q->where(
                 fn ($w) => $w->where('name', 'like', "%{$term}%")->orWhere('body', 'like', "%{$term}%")
@@ -265,6 +283,25 @@ class PostController extends Controller
         $copy = $this->composer->duplicate($post->load(['media', 'variants']), $request->user()->id);
 
         return PostResource::make($copy)->response()->setStatusCode(201);
+    }
+
+    /**
+     * A checkbox group, but only when it actually narrows anything.
+     *
+     * Ticking every box and ticking none are the same question, and answering
+     * the first with a whereIn of every case is a longer query for the same
+     * rows. Values the enum does not know are dropped rather than passed to the
+     * database.
+     *
+     * @param  array<int, \BackedEnum>  $cases
+     * @return list<string>|null
+     */
+    private function narrowing(Request $request, string $key, array $cases): ?array
+    {
+        $all = array_map(fn (\BackedEnum $case) => (string) $case->value, $cases);
+        $picked = array_values(array_intersect((array) $request->input($key, []), $all));
+
+        return ($picked === [] || count($picked) === count($all)) ? null : $picked;
     }
 
     /** Per-account delivery log for one post. */

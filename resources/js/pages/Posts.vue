@@ -1,11 +1,12 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../lib/api';
 import { useAuthStore } from '../stores/auth';
 import { listen, socketState } from '../lib/echo';
 import NavIcon from '../components/NavIcon.vue';
 import ErrorPopover from '../components/ErrorPopover.vue';
+import FilterDropdown from '../components/FilterDropdown.vue';
 import PhonePreview from '../components/PhonePreview.vue';
 
 const auth = useAuthStore();
@@ -14,7 +15,6 @@ const router = useRouter();
 const posts = ref([]);
 const meta = ref(null);
 const loading = ref(true);
-const status = ref('');
 const type = ref('');
 const search = ref('');
 const page = ref(1);
@@ -30,12 +30,108 @@ const statuses = [
     { value: 'failed', label: 'Thất bại' },
 ];
 
-/* Mirrors how Ads Manager splits its Posts list. */
+/*
+ * One dropdown for "which of my posts", the way Ads Manager asks it.
+ *
+ * Promoted and organic are a column, scheduled and drafts are a status. They
+ * belong together because that is the single question being asked -- splitting
+ * it across two controls let someone pick a combination with no rows in it.
+ */
 const types = [
     { value: '', label: 'Tất cả' },
-    { value: 'organic', label: 'Organic' },
     { value: 'promoted', label: 'Promoted' },
+    { value: 'organic', label: 'Organic' },
+    { value: 'scheduled', label: 'Đã lên lịch' },
+    { value: 'drafts', label: 'Nháp' },
 ];
+
+/*
+ * The checkbox groups behind "Bộ lọc".
+ *
+ * Every box starts ticked, because a filter panel that hides rows before it has
+ * been opened is a list that lies. Nothing ticked and everything ticked ask the
+ * same question, and the server treats them the same.
+ *
+ * Ads Manager has a "Replies & mentions" group here. Xpost has no such thing --
+ * every post it creates is an original -- and a control that can never change
+ * the result is worse than a missing one.
+ */
+const destinations = [
+    { value: 'app', label: 'App' },
+    { value: 'website', label: 'Website' },
+    { value: 'none', label: 'Không có link' },
+];
+
+const mediaKinds = [
+    { value: 'photo', label: 'Ảnh' },
+    { value: 'video', label: 'Video' },
+    { value: 'none', label: 'Không có media' },
+];
+
+const outcomes = [
+    { value: 'published', label: 'Đã đăng' },
+    { value: 'publishing', label: 'Đang đăng' },
+    { value: 'partially_failed', label: 'Đăng một phần' },
+    { value: 'failed', label: 'Thất bại' },
+    { value: 'draft', label: 'Nháp' },
+    { value: 'scheduled', label: 'Đã lên lịch' },
+];
+
+const picked = reactive({
+    destinations: destinations.map((row) => row.value),
+    media: mediaKinds.map((row) => row.value),
+    statuses: outcomes.map((row) => row.value),
+});
+
+function toggleIn(group, value) {
+    picked[group] = picked[group].includes(value)
+        ? picked[group].filter((v) => v !== value)
+        : [...picked[group], value];
+
+    page.value = 1;
+    load();
+}
+
+/** Ads Manager counts the ticked boxes, not the narrowed ones. */
+const filterCount = computed(() =>
+    picked.destinations.length + picked.media.length + picked.statuses.length);
+
+/* ── Account ─────────────────────────────────────────────────────────────── */
+
+/*
+ * Searched on the server rather than listed.
+ *
+ * Ads Manager can put every account in this dropdown because it has one. Here
+ * there are a thousand, and a dropdown that downloads them all is the mistake
+ * the proxy page already made once.
+ */
+const accountId = ref('');
+const accountLabel = ref('Tất cả');
+const accountSearch = ref('');
+const accountResults = ref([]);
+
+let accountTimer;
+
+async function findAccounts() {
+    clearTimeout(accountTimer);
+
+    accountTimer = setTimeout(async () => {
+        const { data } = await api.get('accounts', {
+            params: { search: accountSearch.value || undefined, per_page: 20 },
+        });
+
+        accountResults.value = data.data;
+    }, 250);
+}
+
+function chooseAccount(account) {
+    accountId.value = account?.id ?? '';
+    accountLabel.value = account ? `@${account.username}` : 'Tất cả';
+    page.value = 1;
+    load();
+}
+
+watch(accountSearch, findAccounts);
 
 const badgeClass = {
     draft: 'bg-neutral-100 text-neutral-700',
@@ -46,9 +142,6 @@ const badgeClass = {
     failed: 'bg-red-50 text-red-700',
     cancelled: 'bg-neutral-100 text-neutral-500',
 };
-
-/** How many filters are narrowing the list, for the badge on the button. */
-const activeFilters = computed(() => [status.value, type.value, search.value].filter(Boolean).length);
 
 /**
  * The scheduler is a separate process from the queue workers, and when it
@@ -327,9 +420,12 @@ async function load(silent = false) {
     try {
         const { data } = await api.get('posts', {
             params: {
-                status: status.value || undefined,
                 type: type.value || undefined,
                 search: search.value || undefined,
+                account_id: accountId.value || undefined,
+                destinations: picked.destinations,
+                media: picked.media,
+                statuses: picked.statuses,
                 page: page.value,
             },
         });
@@ -791,25 +887,101 @@ const destinationHost = (url) => {
                 <input v-model="search" type="search" class="xp-field pl-9" placeholder="Tìm kiếm">
             </div>
 
-            <span
-                class="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-2 text-[13px] text-neutral-600"
+            <!--
+                The panel that was a decorative span.
+
+                It rendered a border, a word and a count, and did nothing at
+                all -- the badge was counting the two selects beside it.
+            -->
+            <FilterDropdown value="Bộ lọc" :count="filterCount" :width="248">
+                <template #icon>
+                    <NavIcon name="filter" :size="14" class="text-neutral-500" />
+                </template>
+
+                <div class="max-h-[420px] overflow-y-auto">
+                    <template v-for="group in [
+                        { key: 'destinations', title: 'Đích đến', rows: destinations },
+                        { key: 'media', title: 'Loại media', rows: mediaKinds },
+                        { key: 'statuses', title: 'Trạng thái', rows: outcomes },
+                    ]" :key="group.key">
+                        <p class="px-3 pb-1 pt-2 text-[11px] uppercase tracking-wide text-neutral-400">
+                            {{ group.title }}
+                        </p>
+                        <label
+                            v-for="row in group.rows"
+                            :key="row.value"
+                            class="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 text-[13px] transition hover:bg-neutral-50"
+                        >
+                            <input
+                                type="checkbox"
+                                class="accent-neutral-900"
+                                :checked="picked[group.key].includes(row.value)"
+                                @change="toggleIn(group.key, row.value)"
+                            >
+                            {{ row.label }}
+                        </label>
+                    </template>
+                </div>
+            </FilterDropdown>
+
+            <!--
+                Searched, not listed. Ads Manager can name every account here
+                because it has one; this pool is a thousand.
+            -->
+            <FilterDropdown ref="accountMenu" label="Account" :value="accountLabel" :width="272">
+                <div class="border-b border-neutral-100 p-2">
+                    <input
+                        v-model="accountSearch"
+                        class="xp-field w-full py-1 text-[12.5px]"
+                        placeholder="Tìm @handle…"
+                        @click.stop
+                    >
+                </div>
+
+                <div class="max-h-64 overflow-y-auto">
+                    <button
+                        type="button"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition hover:bg-neutral-50"
+                        @click="chooseAccount(null); $refs.accountMenu.close()"
+                    >
+                        <span class="flex-1">Tất cả tài khoản</span>
+                        <NavIcon v-if="!accountId" name="check" :size="13" />
+                    </button>
+
+                    <button
+                        v-for="account in accountResults"
+                        :key="account.id"
+                        type="button"
+                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition hover:bg-neutral-50"
+                        @click="chooseAccount(account); $refs.accountMenu.close()"
+                    >
+                        <span class="min-w-0 flex-1 truncate">@{{ account.username }}</span>
+                        <NavIcon v-if="accountId === account.id" name="check" :size="13" />
+                    </button>
+
+                    <p v-if="!accountResults.length" class="px-3 py-3 text-[12.5px] text-neutral-500">
+                        Gõ để tìm tài khoản.
+                    </p>
+                </div>
+            </FilterDropdown>
+
+            <FilterDropdown
+                ref="typeMenu"
+                label="Posts"
+                :value="types.find((option) => option.value === type)?.label"
+                :width="200"
             >
-                Bộ lọc
-                <span
-                    v-if="activeFilters"
-                    class="rounded bg-neutral-900 px-1.5 text-[11px] font-medium text-white"
-                >{{ activeFilters }}</span>
-            </span>
-
-            <select v-model="status" class="xp-field max-w-[190px]">
-                <option v-for="option in statuses" :key="option.value" :value="option.value">{{ option.label }}</option>
-            </select>
-
-            <select v-model="type" class="xp-field max-w-[150px]">
-                <option v-for="option in types" :key="option.value" :value="option.value">
-                    Posts: {{ option.label }}
-                </option>
-            </select>
+                <button
+                    v-for="option in types"
+                    :key="option.value"
+                    type="button"
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition hover:bg-neutral-50"
+                    @click="type = option.value; page = 1; load(); $refs.typeMenu.close()"
+                >
+                    <span class="flex-1">{{ option.label }}</span>
+                    <NavIcon v-if="type === option.value" name="check" :size="13" />
+                </button>
+            </FilterDropdown>
         </div>
 
         <!--

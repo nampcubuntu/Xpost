@@ -57,6 +57,8 @@ const paths = {
     selector: 'M5.5 6.5 8 4l2.5 2.5M5.5 9.5 8 12l2.5-2.5',
     chevron: 'M4.5 6.5 8 10l3.5-3.5',
     check: 'M3.5 8.5 6.5 11.5 12.5 5',
+    // A funnel, the way Ads Manager marks its filter button.
+    filter: 'M2.5 3.5h11l-4.3 5v4.2l-2.4 1.3V8.5Z',
     search: 'M7.2 12.4a5.2 5.2 0 1 0 0-10.4 5.2 5.2 0 0 0 0 10.4ZM11 11l3.2 3.2',
     copy: 'M5.5 5.5h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1ZM10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2',
     plus: 'M8 3.5v9M3.5 8h9',

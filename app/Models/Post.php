@@ -122,13 +122,69 @@ class Post extends Model
      * the author's timeline -- so telling the two apart matters more than the
      * publishing status does when you are looking for something.
      */
+    /**
+     * The one dropdown Ads Manager puts a post's kind behind.
+     *
+     * Promoted and organic are a column; scheduled and drafts are a status.
+     * They sit together because that is the question being asked -- "which of
+     * my posts" -- and splitting it across two controls made the caller pick a
+     * combination that has no rows in it.
+     */
     public function scopeType(Builder $query, ?string $type): Builder
     {
         return match ($type) {
             'promoted' => $query->where('promoted_only', true),
             'organic' => $query->where('promoted_only', false),
+            'scheduled' => $query->where('status', PostStatus::Scheduled->value),
+            'drafts' => $query->where('status', PostStatus::Draft->value),
             default => $query,
         };
+    }
+
+    /**
+     * Posts that went to one particular account.
+     *
+     * Through the fan-out rather than off the post: a post here has no single
+     * account, which is the whole difference from Ads Manager. `whereHas` and
+     * not a join, so a post reaching an account twice cannot come back twice.
+     */
+    public function scopeForAccount(Builder $query, ?int $accountId): Builder
+    {
+        return $query->when($accountId, fn (Builder $q, int $id) => $q->whereHas(
+            'targets', fn (Builder $w) => $w->where('x_account_id', $id)
+        ));
+    }
+
+    /**
+     * Posts carrying a photo, a video, or nothing.
+     *
+     * Matched on the mime prefix rather than the category enum: the category
+     * says how the file was uploaded to X (amplify_video, tweet_image), which
+     * is a detail of the upload and not what someone filtering a list means.
+     *
+     * @param  list<string>  $kinds  any of photo, video, none
+     */
+    public function scopeWithMedia(Builder $query, array $kinds): Builder
+    {
+        $kinds = array_values(array_intersect($kinds, ['photo', 'video', 'none']));
+
+        // Nothing ticked and everything ticked are the same question.
+        if ($kinds === [] || count($kinds) === 3) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $outer) use ($kinds): void {
+            foreach ($kinds as $kind) {
+                if ($kind === 'none') {
+                    $outer->orWhereDoesntHave('media');
+
+                    continue;
+                }
+
+                $prefix = $kind === 'photo' ? 'image/' : 'video/';
+                $outer->orWhereHas('media', fn (Builder $w) => $w->where('mime', 'like', $prefix.'%'));
+            }
+        });
     }
 
     /**

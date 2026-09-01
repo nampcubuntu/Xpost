@@ -116,7 +116,18 @@ final class CloudflareKvClient
 
         return [
             'keys' => array_map(
-                fn (array $key) => ['name' => (string) $key['name']],
+                /*
+                 * The metadata comes back with the listing at no extra cost and
+                 * was being thrown away. It is the only place a creation time
+                 * can live: KV lists lexicographically and has no notion of
+                 * when a key was written.
+                 */
+                fn (array $key) => [
+                    'name' => (string) $key['name'],
+                    'created_at' => isset($key['metadata']['created_at'])
+                        ? (int) $key['metadata']['created_at']
+                        : null,
+                ],
                 (array) ($body['result'] ?? []),
             ),
             // Cloudflare sends an empty string rather than null on the last page.
@@ -124,6 +135,41 @@ final class CloudflareKvClient
                 ? (string) $body['result_info']['cursor']
                 : null,
         ];
+    }
+
+    /**
+     * Every key, across as many pages as it takes.
+     *
+     * Needed because KV lists lexicographically and the page wants newest
+     * first: a sort that can only see one page would put a link created today
+     * below one created last year, purely because of where the cursor fell.
+     *
+     * Cheap in the way that matters -- the listing carries names and metadata
+     * but no values, so this is one request per thousand keys and the values
+     * are still read only for the rows actually shown.
+     *
+     * Capped rather than unbounded: at some size the right answer is a search,
+     * not a sorted list of everything, and the caller is told when it hit the
+     * ceiling instead of being handed a quiet truncation.
+     *
+     * @return array{keys: list<array{name: string, created_at: ?int}>, complete: bool}
+     */
+    public function listAllKeys(?string $prefix = null, int $maxPages = 10): array
+    {
+        $keys = [];
+        $cursor = null;
+
+        for ($page = 0; $page < $maxPages; $page++) {
+            $result = $this->listKeys($prefix, $cursor, 1000);
+            $keys = array_merge($keys, $result['keys']);
+            $cursor = $result['cursor'];
+
+            if ($cursor === null) {
+                return ['keys' => $keys, 'complete' => true];
+            }
+        }
+
+        return ['keys' => $keys, 'complete' => false];
     }
 
     /** null when the key is absent, which KV reports as a 404. */
@@ -184,7 +230,9 @@ final class CloudflareKvClient
             ->asMultipart()
             ->put($this->url('values/'.rawurlencode($key)), [
                 ['name' => 'value', 'contents' => $value],
-                ['name' => 'metadata', 'contents' => '{}'],
+                // Stamped here because nothing else can: this is the only
+                // moment the key's age is known, and KV will not tell us later.
+                ['name' => 'metadata', 'contents' => json_encode(['created_at' => time()])],
             ]);
 
         $this->guard($response);
@@ -202,7 +250,9 @@ final class CloudflareKvClient
             $body = [];
 
             foreach ($chunk as $key => $value) {
-                $body[] = ['key' => (string) $key, 'value' => $value];
+                // Same stamp as put(): a pasted batch has an age too, and
+                // without it every imported link sorts to the bottom forever.
+                $body[] = ['key' => (string) $key, 'value' => $value, 'metadata' => ['created_at' => time()]];
             }
 
             $this->guard($this->request()->asJson()->put($this->url('bulk'), $body));

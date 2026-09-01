@@ -10,6 +10,7 @@ use App\Models\LinkDomain;
 use App\Models\Team;
 use App\Services\Links\CloudflareKvClient;
 use App\Services\Links\TinyUrlService;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -43,17 +44,52 @@ class LinkController extends Controller
 
         $request->validate([
             'prefix' => ['nullable', 'string', 'max:512'],
-            'cursor' => ['nullable', 'string', 'max:4096'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
 
+        $perPage = min(max((int) $request->query('per_page', 50), 1), 100);
+        $page = max((int) $request->query('page', 1), 1);
+
         try {
-            $page = $this->kv->listKeys(
-                $request->query('prefix') ?: null,
-                $request->query('cursor') ?: null,
-            );
+            /*
+             * Every key, then sorted, then one page of it.
+             *
+             * KV lists lexicographically and offers a cursor, nothing else --
+             * so "newest first" cannot be asked of it. Sorting a single cursor
+             * page would put a link made today under one made last year purely
+             * because of where the cursor happened to fall.
+             *
+             * The listing carries names and metadata but no values, so reading
+             * all of it costs one request per thousand keys, and the values are
+             * still fetched only for the rows this page shows.
+             */
+            $all = $this->kv->listAllKeys($request->query('prefix') ?: null);
         } catch (XApiException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
+
+        $keys = $all['keys'];
+
+        /*
+         * Newest first, and the undated last.
+         *
+         * created_at lives in the key's metadata and is stamped on write, so
+         * anything written before that existed has none. Those sort to the
+         * bottom by name rather than being guessed at -- a made-up date on an
+         * old link would be worse than an empty cell.
+         */
+        usort($keys, function (array $a, array $b): int {
+            if ($a['created_at'] === $b['created_at']) {
+                return strcmp($a['name'], $b['name']);
+            }
+
+            return ($b['created_at'] ?? PHP_INT_MIN) <=> ($a['created_at'] ?? PHP_INT_MIN);
+        });
+
+        $total = count($keys);
+        $slice = array_slice($keys, ($page - 1) * $perPage, $perPage);
+        $names = array_column($slice, 'name');
 
         /*
          * KV lists keys without their values, so the page needs a read per row.
@@ -62,22 +98,32 @@ class LinkController extends Controller
          * before the table appeared. The bulk endpoint answers the whole page
          * in one.
          */
-        $names = array_column($page['keys'], 'name');
         $values = $this->kv->getMany($names);
 
-        $rows = array_map(fn (string $name) => [
-            'key' => $name,
+        $rows = array_map(fn (array $key) => [
+            'key' => $key['name'],
             // Absent rather than null-checked: a key listed a moment ago and
             // gone by the read is a race, not an error, and an empty cell says
             // so better than a failed page.
-            'value' => $values[$name] ?? null,
-        ], $names);
+            'value' => $values[$key['name']] ?? null,
+            'created_at' => $key['created_at']
+                ? CarbonImmutable::createFromTimestamp($key['created_at'])->toIso8601String()
+                : null,
+        ], $slice);
 
         $domains = $this->domainList();
 
         return response()->json([
             'data' => $this->withTinyLinks($rows, $domains),
-            'cursor' => $page['cursor'],
+            'meta' => [
+                'current_page' => $page,
+                'last_page' => max(1, (int) ceil($total / $perPage)),
+                'per_page' => $perPage,
+                'total' => $total,
+                // False when the namespace holds more keys than the sweep will
+                // read. Said rather than silently truncated.
+                'complete' => $all['complete'],
+            ],
             'domains' => $domains,
             'tinyurl_enabled' => $this->tiny->isEnabled(),
         ]);

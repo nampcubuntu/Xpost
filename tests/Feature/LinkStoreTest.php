@@ -70,8 +70,15 @@ class LinkStoreTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.key', 'r:abc')
             ->assertJsonPath('data.0.value', 'https://img/1|https://dest/')
-            // An empty string is Cloudflare's last page, not a cursor.
-            ->assertJsonPath('cursor', null);
+            /*
+             * Pages by number now, not by cursor. This asserted `cursor` was
+             * null, which stayed green when the field went away entirely --
+             * data_get on a missing key is also null. The count is the part
+             * that cannot pass by absence.
+             */
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('meta.last_page', 1)
+            ->assertJsonPath('meta.complete', true);
     }
 
     #[Test]
@@ -281,10 +288,18 @@ class LinkStoreTest extends TestCase
                 return false;
             }
 
-            return $request->data()[0] === [
-                'key' => 'r:abc',
-                'value' => 'https://imgur.com/a/one|https://twvideo.top/',
-            ];
+            $pair = $request->data()[0];
+
+            /*
+             * The metadata is asserted rather than ignored: it is where the
+             * creation time lives, and it is the only place it can. KV lists
+             * lexicographically and has no notion of when a key was written, so
+             * a paste that skipped the stamp would sort below every hand-added
+             * link for good.
+             */
+            return $pair['key'] === 'r:abc'
+                && $pair['value'] === 'https://imgur.com/a/one|https://twvideo.top/'
+                && is_int($pair['metadata']['created_at'] ?? null);
         });
     }
 
@@ -375,5 +390,51 @@ class LinkStoreTest extends TestCase
     public function it_needs_a_signed_in_user(): void
     {
         $this->getJson('/api/v1/links')->assertUnauthorized();
+    }
+
+    #[Test]
+    public function the_newest_link_is_the_first_one_listed(): void
+    {
+        /*
+         * The whole reason the creation time is stamped at all. KV lists
+         * lexicographically and offers a cursor, nothing else -- so without a
+         * stamp in the metadata "newest first" is not a question it can answer,
+         * and a link made today lands wherever its name happens to fall.
+         */
+        Http::fake([
+            'api.cloudflare.com/*/keys*' => Http::response(['success' => true, 'result' => [
+                ['name' => 'r:aaa', 'metadata' => ['created_at' => 1000]],
+                ['name' => 'r:zzz', 'metadata' => ['created_at' => 9000]],
+                ['name' => 'r:mmm'],
+            ], 'result_info' => ['cursor' => '']]),
+            'api.cloudflare.com/*' => Http::response(['success' => true, 'result' => ['values' => []]]),
+        ]);
+
+        $rows = $this->actingAs($this->user)->getJson('/api/v1/links')->assertOk()->json('data');
+
+        // Newest first, and the one with no stamp last rather than guessed at.
+        $this->assertSame(['r:zzz', 'r:aaa', 'r:mmm'], array_column($rows, 'key'));
+        $this->assertNotNull($rows[0]['created_at']);
+        $this->assertNull($rows[2]['created_at']);
+    }
+
+    #[Test]
+    public function a_namespace_too_large_to_sort_says_so(): void
+    {
+        /*
+         * Past the sweep's ceiling the sort can only see what it read, so
+         * "newest first" becomes newest-of-some -- which looks exactly like the
+         * truth. The page is told, rather than being handed a quiet truncation.
+         */
+        Http::fake([
+            'api.cloudflare.com/*/keys*' => Http::response(['success' => true, 'result' => [
+                ['name' => 'r:aaa', 'metadata' => ['created_at' => 1000]],
+            ], 'result_info' => ['cursor' => 'more-to-come']]),
+            'api.cloudflare.com/*' => Http::response(['success' => true, 'result' => ['values' => []]]),
+        ]);
+
+        $meta = $this->actingAs($this->user)->getJson('/api/v1/links')->assertOk()->json('meta');
+
+        $this->assertFalse($meta['complete']);
     }
 }

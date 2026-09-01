@@ -14,8 +14,16 @@ import NavIcon from '../components/NavIcon.vue';
  * is worse than a page that takes a moment to load.
  */
 const rows = ref([]);
-const cursor = ref(null);
-const pages = ref([]);        // cursors already visited, so Back works
+/*
+ * Page numbers, not cursors.
+ *
+ * KV pages by cursor and lists lexicographically, so a cursor could only
+ * ever walk the alphabet. The server reads the whole key listing -- names
+ * and metadata, no values -- sorts it by creation time and hands back a
+ * slice, which is what makes "newest first" possible at all.
+ */
+const page = ref(1);
+const meta = ref(null);
 const loading = ref(true);
 const busy = ref(false);
 const flash = ref(null);
@@ -185,7 +193,7 @@ const bulkCount = computed(() => bulkText.value
     .filter((line) => line.includes('=') || line.includes('\t'))
     .length);
 
-async function load(nextCursor = null) {
+async function load() {
     /*
      * The last answer first, then the true one.
      *
@@ -194,11 +202,11 @@ async function load(nextCursor = null) {
      * for rows that had almost always not changed. Showing them straight away
      * costs being one navigation stale for about a second.
      */
-    const key = `links:${prefix.value ?? ''}:${nextCursor ?? ''}`;
+    const key = `links:${prefix.value ?? ''}:${page.value}`;
 
     const apply = (data) => {
         rows.value = data.data;
-        cursor.value = data.cursor;
+        meta.value = data.meta ?? null;
         domains.value = data.domains ?? [];
         tinyEnabled.value = data.tinyurl_enabled === true;
         configured.value = true;
@@ -210,7 +218,7 @@ async function load(nextCursor = null) {
     try {
         await swr(key, async () => {
             const { data } = await api.get('links', {
-                params: { prefix: prefix.value || undefined, cursor: nextCursor || undefined },
+                params: { prefix: prefix.value || undefined, page: page.value },
             });
 
             return data;
@@ -225,19 +233,22 @@ async function load(nextCursor = null) {
 }
 
 function search() {
-    pages.value = [];
+    page.value = 1;
     load();
 }
 
-function nextPage() {
-    pages.value.push(cursor.value);
-    load(cursor.value);
+function goTo(target) {
+    page.value = Math.min(Math.max(1, target), meta.value?.last_page ?? 1);
+    load();
 }
 
-function previousPage() {
-    pages.value.pop();
-    load(pages.value[pages.value.length - 1] ?? null);
-}
+/** When it was made, or nothing. An invented date on an old key would be
+ *  worse than an empty cell -- the stamp only exists from the day it shipped. */
+const createdAt = (iso) => (iso
+    ? new Date(iso).toLocaleString('vi-VN', {
+        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+    : null);
 
 async function addEntry() {
     if (!newValue.value.trim()) {
@@ -254,7 +265,8 @@ async function addEntry() {
         flash.value = { type: 'ok', message: `Đã thêm ${data.data.key}.` };
         newKey.value = '';
         newValue.value = '';
-        await load(pages.value[pages.value.length - 1] ?? null);
+        page.value = 1;
+        await load();
     } catch (error) {
         flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không thêm được.' };
     } finally {
@@ -538,6 +550,7 @@ onMounted(load);
                             <th class="px-4 py-2.5 font-medium">Value</th>
                             <th class="px-4 py-2.5 font-medium">Short link</th>
                             <th class="px-4 py-2.5 font-medium">TinyURL</th>
+                            <th class="whitespace-nowrap px-4 py-2.5 font-medium">Tạo lúc</th>
                             <th class="w-24 px-4 py-2.5"></th>
                         </tr>
                     </thead>
@@ -592,10 +605,24 @@ onMounted(load);
                                 </button>
                                 <span v-else class="text-[12px] text-neutral-400">—</span>
                             </td>
+
+                            <!--
+                                Stamped into the key's KV metadata on write, so
+                                keys made before that shipped have none. An
+                                invented date on an old one would be worse than
+                                an empty cell.
+                            -->
+                            <td class="whitespace-nowrap px-4 py-2.5 align-top text-[12.5px] text-neutral-600">
+                                <template v-if="createdAt(row.created_at)">{{ createdAt(row.created_at) }}</template>
+                                <span v-else class="text-neutral-300" title="Link tạo trước khi Xpost bắt đầu ghi thời gian">—</span>
+                            </td>
+
                             <td class="px-4 py-2.5 text-right align-top">
-                                <button class="text-red-600 hover:underline" :disabled="busy" @click="remove(row.key)">
-                                    Xoá
-                                </button>
+                                <button
+                                    class="rounded-md px-2 py-1 text-[12.5px] text-neutral-500 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                                    :disabled="busy"
+                                    @click="remove(row.key)"
+                                >Xoá</button>
                             </td>
                         </tr>
                     </tbody>
@@ -603,13 +630,22 @@ onMounted(load);
             </div>
         </div>
 
-        <!--
-            KV pages by cursor, not by page number: it can go forward, and back
-            only through cursors already seen.
-        -->
-        <div class="mt-4 flex items-center gap-2">
-            <button class="xp-btn-ghost" :disabled="!pages.length" @click="previousPage">Trước</button>
-            <button class="xp-btn-ghost" :disabled="!cursor" @click="nextPage">Sau</button>
+        <div v-if="meta" class="mt-4 flex flex-wrap items-center gap-3">
+            <button class="xp-btn-ghost" :disabled="meta.current_page <= 1" @click="goTo(meta.current_page - 1)">Trước</button>
+            <span class="text-[13px] text-neutral-600">
+                Trang {{ meta.current_page }} / {{ meta.last_page }}
+                <span class="text-neutral-400">· {{ meta.total.toLocaleString('vi-VN') }} link</span>
+            </span>
+            <button class="xp-btn-ghost" :disabled="meta.current_page >= meta.last_page" @click="goTo(meta.current_page + 1)">Sau</button>
+
+            <!--
+                Said rather than silently truncated. Past the sweep's ceiling the
+                sort can no longer see every key, so "newest first" would be
+                newest-of-what-was-read -- which looks identical to the truth.
+            -->
+            <span v-if="!meta.complete" class="text-[12.5px] text-amber-700">
+                Namespace lớn hơn mức đọc được một lần — thứ tự chỉ đúng trong phần đã đọc. Lọc theo tiền tố để thu hẹp.
+            </span>
         </div>
     </div>
 </template>

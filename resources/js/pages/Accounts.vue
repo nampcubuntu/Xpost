@@ -19,6 +19,8 @@ const flash = ref(null);
 
 const search = ref('');
 const status = ref('');
+// The server has taken a group_id since the beginning; nothing ever sent one.
+const groupFilter = ref('');
 const page = ref(1);
 const selected = ref(new Set());
 
@@ -41,7 +43,12 @@ async function load() {
     try {
         const [accountResponse, statsResponse] = await Promise.all([
             api.get('accounts', {
-                params: { search: search.value || undefined, status: status.value || undefined, page: page.value },
+                params: {
+                    search: search.value || undefined,
+                    status: status.value || undefined,
+                    group_id: groupFilter.value || undefined,
+                    page: page.value,
+                },
             }),
             api.get('accounts/stats'),
         ]);
@@ -79,7 +86,7 @@ onMounted(async () => {
 });
 
 let timer;
-watch([search, status], () => {
+watch([search, status, groupFilter], () => {
     page.value = 1;
     clearTimeout(timer);
     timer = setTimeout(load, 300);
@@ -494,6 +501,19 @@ async function connectAccount(flow) {
             </select>
 
             <!--
+                Filtered on the server, like search and status: a group can hold
+                more accounts than one page shows, so narrowing the fifty rows
+                already fetched would find only the members that landed on this
+                page.
+            -->
+            <select v-model="groupFilter" class="xp-field max-w-[190px]">
+                <option value="">Mọi nhóm</option>
+                <option v-for="row in groups" :key="row.id" :value="row.id">
+                    {{ row.name }} ({{ row.accounts_count ?? 0 }})
+                </option>
+            </select>
+
+            <!--
                 A button, at the height of the fields beside it, and the only
                 way to make a group at all: the endpoints existed and no page
                 reached them, so the dropdown below was empty on every install
@@ -541,15 +561,15 @@ async function connectAccount(flow) {
                 >Làm mới token</button>
 
                 <select
-                    class="rounded-md border-0 bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/20 focus:ring-1 focus:ring-white/40 disabled:opacity-40"
+                    class="xp-dark-select"
                     :disabled="busy || !groups.length"
                     :value="''"
                     @change="$event.target.value && runBulk('assign_group', { group_id: Number($event.target.value) }); $event.target.value = ''"
                 >
-                    <option value="" class="text-neutral-900">
+                    <option value="">
                         {{ groups.length ? 'Thêm vào nhóm…' : 'Chưa có nhóm nào' }}
                     </option>
-                    <option v-for="group in groups" :key="group.id" :value="group.id" class="text-neutral-900">
+                    <option v-for="group in groups" :key="group.id" :value="group.id">
                         {{ group.name }}
                     </option>
                 </select>
@@ -564,7 +584,7 @@ async function connectAccount(flow) {
                     have to sit on a particular exit.
                 -->
                 <select
-                    class="max-w-[240px] rounded-md border-0 bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/20 focus:ring-1 focus:ring-white/40 disabled:opacity-40"
+                    class="xp-dark-select max-w-[240px]"
                     :disabled="busy"
                     @change="onProxyPick($event.target)"
                 >

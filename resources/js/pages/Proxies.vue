@@ -819,13 +819,13 @@ async function remove(proxy) {
                     same group can be chosen again for the next selection.
                 -->
                 <select
-                    class="rounded-md border-0 bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/20 focus:ring-1 focus:ring-white/40 disabled:opacity-40"
+                    class="xp-dark-select"
                     :disabled="busy || !groups.length"
                     :value="''"
                     @change="assignGroup($event.target.value); $event.target.value = ''"
                 >
-                    <option value="" class="text-neutral-900">Gán nhóm…</option>
-                    <option v-for="row in groups" :key="row.id" :value="row.id" class="text-neutral-900">
+                    <option value="">Gán nhóm…</option>
+                    <option v-for="row in groups" :key="row.id" :value="row.id">
                         {{ row.name }}
                     </option>
                 </select>

@@ -154,4 +154,48 @@ class AccountGroupTest extends TestCase
             ->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.name', 'Của tôi');
     }
+
+    #[Test]
+    public function the_account_list_can_be_narrowed_to_one_group(): void
+    {
+        /*
+         * The server has taken group_id since the beginning and nothing ever
+         * sent one, so this is the first thing to exercise it. Filtered here
+         * rather than in the browser because a group can hold more accounts
+         * than one page shows -- narrowing the fifty rows already fetched would
+         * find only the members that happened to land on this page.
+         */
+        $group = AccountGroup::factory()->create(['team_id' => $this->team->id]);
+        $member = $this->account(['username' => 'trong_nhom']);
+        $this->account(['username' => 'ngoai_nhom']);
+
+        $group->accounts()->attach($member->id);
+
+        $rows = $this->getJson("/api/v1/accounts?group_id={$group->id}")->assertOk()->json('data');
+
+        $this->assertCount(1, $rows);
+        $this->assertSame('trong_nhom', $rows[0]['username']);
+    }
+
+    #[Test]
+    public function an_account_can_be_in_more_than_one_group(): void
+    {
+        // Groups here are batches someone named, and a market and a campaign
+        // are both true of the same account at once.
+        $account = $this->account();
+        $first = AccountGroup::factory()->create(['team_id' => $this->team->id, 'name' => 'Thị trường VN']);
+        $second = AccountGroup::factory()->create(['team_id' => $this->team->id, 'name' => 'Chiến dịch Tết']);
+
+        foreach ([$first, $second] as $group) {
+            $this->postJson('/api/v1/accounts/bulk', [
+                'action' => 'assign_group',
+                'account_ids' => [$account->id],
+                'group_id' => $group->id,
+            ])->assertOk();
+        }
+
+        $this->assertSame(2, $account->groups()->count());
+        $this->assertSame(1, $first->fresh()->accounts_count);
+        $this->assertSame(1, $second->fresh()->accounts_count);
+    }
 }

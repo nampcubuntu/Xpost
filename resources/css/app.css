@@ -30,6 +30,27 @@
                focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900;
     }
 
+    /*
+     * A native select sitting on the dark selection bar.
+     *
+     * The closed control has to be white to be readable on black -- but the
+     * options are drawn by the OS on its own light popup, so they inherit that
+     * white and vanish. It shipped exactly that way: a dropdown that opened
+     * onto an empty white box.
+     *
+     * A rule rather than a class on every option, because the option list is
+     * the part that gets added to later, and this is not a thing to remember.
+     */
+    .xp-dark-select {
+        @apply rounded-md border-0 bg-white/10 px-2 py-1 text-[13px] text-white
+               transition hover:bg-white/20 focus:ring-1 focus:ring-white/40
+               disabled:opacity-40;
+    }
+
+    .xp-dark-select option {
+        @apply text-neutral-900;
+    }
+
     .xp-label {
         @apply block text-[13px] font-medium text-neutral-700;
     }

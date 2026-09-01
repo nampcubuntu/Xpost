@@ -118,7 +118,22 @@ final class AnalyticsQueryService
         return $rows[0] ?? [];
     }
 
-    /** Which accounts actually perform, ranked by engagement rate. */
+    /**
+     * Which accounts actually perform.
+     *
+     * Every figure here is read off the latest snapshot per tweet, never
+     * summed across snapshots. The counters X returns are cumulative, and
+     * this table is written hourly -- so adding the rows up counts the same
+     * impression once per hour the post has existed. Measured on this
+     * install: five tweets, ninety-two snapshots, sixteen impressions
+     * reported as a hundred and seventy-five.
+     */
+    /*
+     * The rate is computed one level out on purpose. `sum(x) AS x` shadows
+     * the column, so an `if()` beside it reading `x` gets the alias and
+     * ClickHouse refuses the query as an aggregate inside an aggregate --
+     * which select() then swallowed, leaving an empty table and no reason.
+     */
     public function topAccounts(Carbon $from, Carbon $to, int $limit = 20): array
     {
         if (! $this->clickhouse->enabled()) {
@@ -127,16 +142,107 @@ final class AnalyticsQueryService
 
         return $this->clickhouse->select(<<<'SQL'
             SELECT
+                account_id, posts, impressions, engagements, likes, profile_visits,
+                if(impressions = 0, 0, round(engagements / impressions * 100, 2)) AS engagement_rate
+            FROM (
+                SELECT
+                    account_id,
+                    count()                  AS posts,
+                    sum(impressions)         AS impressions,
+                    sum(engagements)         AS engagements,
+                    sum(likes)               AS likes,
+                    sum(user_profile_clicks) AS profile_visits
+                FROM (SELECT * FROM xpost_tweet_metrics
+                      WHERE team_id = :team_id AND snapshot_time BETWEEN :from AND :to
+                      ORDER BY snapshot_time DESC LIMIT 1 BY tweet_id)
+                GROUP BY account_id
+            )
+            ORDER BY engagements DESC, impressions DESC
+            LIMIT :limit
+        SQL, [
+            'team_id' => TeamContext::id() ?? 0,
+            'from' => $from->toDateTimeString(),
+            'to' => $to->toDateTimeString(),
+            'limit' => $limit,
+        ]);
+    }
+
+    /**
+     * The headline engagement figures, over whatever had metrics in the range.
+     *
+     * "Had metrics in the range" rather than "was published in it": the
+     * counters X returns are running totals for the life of the post, so there
+     * is no honest way to slice them into what a given day earned. The page has
+     * to say which of the two it is showing rather than let a reader assume.
+     */
+    public function engagementTotals(Carbon $from, Carbon $to): array
+    {
+        if (! $this->clickhouse->enabled()) {
+            return [];
+        }
+
+        $rows = $this->clickhouse->select(<<<'SQL'
+            SELECT
+                posts, impressions, engagements, likes, retweets, replies,
+                quotes, bookmarks, profile_visits,
+                if(impressions = 0, 0, round(engagements / impressions * 100, 2)) AS engagement_rate
+            FROM (
+                SELECT
+                    count()                  AS posts,
+                    sum(impressions)         AS impressions,
+                    sum(engagements)         AS engagements,
+                    sum(likes)               AS likes,
+                    sum(retweets)            AS retweets,
+                    sum(replies)             AS replies,
+                    sum(quotes)              AS quotes,
+                    sum(bookmarks)           AS bookmarks,
+                    sum(user_profile_clicks) AS profile_visits
+                FROM (SELECT * FROM xpost_tweet_metrics
+                      WHERE team_id = :team_id AND snapshot_time BETWEEN :from AND :to
+                      ORDER BY snapshot_time DESC LIMIT 1 BY tweet_id)
+            )
+        SQL, [
+            'team_id' => TeamContext::id() ?? 0,
+            'from' => $from->toDateTimeString(),
+            'to' => $to->toDateTimeString(),
+        ]);
+
+        return $rows[0] ?? [];
+    }
+
+    /**
+     * One row per published tweet, which is the view X Premium actually shows.
+     *
+     * Per tweet rather than per post: a post fans out to many accounts, and the
+     * whole reason to look at this screen is that the same text does not
+     * perform the same from every handle.
+     */
+    public function topPosts(Carbon $from, Carbon $to, int $limit = 25): array
+    {
+        if (! $this->clickhouse->enabled()) {
+            return [];
+        }
+
+        return $this->clickhouse->select(<<<'SQL'
+            SELECT
+                tweet_id,
+                post_id,
                 account_id,
-                count(DISTINCT tweet_id) AS posts,
-                sum(impressions)         AS impressions,
-                sum(engagements)         AS engagements,
-                if(sum(impressions) = 0, 0,
-                   round(sum(engagements) / sum(impressions) * 100, 2)) AS engagement_rate
-            FROM xpost_tweet_metrics
-            WHERE team_id = :team_id AND snapshot_time BETWEEN :from AND :to
-            GROUP BY account_id
-            ORDER BY engagements DESC
+                impressions,
+                engagements,
+                likes,
+                retweets,
+                replies,
+                quotes,
+                bookmarks,
+                user_profile_clicks AS profile_visits,
+                if(impressions = 0, 0,
+                   round(engagements / impressions * 100, 2)) AS engagement_rate,
+                snapshot_time AS measured_at
+            FROM (SELECT * FROM xpost_tweet_metrics
+                  WHERE team_id = :team_id AND snapshot_time BETWEEN :from AND :to
+                  ORDER BY snapshot_time DESC LIMIT 1 BY tweet_id)
+            ORDER BY impressions DESC, engagements DESC
             LIMIT :limit
         SQL, [
             'team_id' => TeamContext::id() ?? 0,

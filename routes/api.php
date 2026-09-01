@@ -153,6 +153,7 @@ Route::prefix('v1')->group(function (): void {
             // ----- Analytics -----
             Route::get('analytics/overview', [AnalyticsController::class, 'overview']);
             Route::get('analytics/accounts', [AnalyticsController::class, 'accounts']);
+            Route::get('analytics/top-posts', [AnalyticsController::class, 'posts']);
             Route::get('analytics/posts/{post}', [AnalyticsController::class, 'post']);
         });
     });

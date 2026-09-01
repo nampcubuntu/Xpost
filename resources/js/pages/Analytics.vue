@@ -1,19 +1,49 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import api from '../lib/api';
 
+/*
+ * What X will actually tell us about a post.
+ *
+ * X Premium's own post view shows impressions, engagements, engagement rate,
+ * profile visits, likes, reposts, replies, bookmarks -- and also detail
+ * expands, new followers and link clicks, which the API does not return at
+ * this access level. The live response for one of this install's posts:
+ *
+ *   "non_public_metrics": {"engagements":0,"impression_count":3,"user_profile_clicks":0}
+ *   "organic_metrics":    {"impression_count":3,"like_count":0,"reply_count":0,
+ *                          "retweet_count":0,"user_profile_clicks":0}
+ *   "public_metrics":     {"bookmark_count":0,"impression_count":3,"like_count":0,
+ *                          "quote_count":0,"reply_count":0,"retweet_count":0}
+ *
+ * There is no url_link_clicks in either block. A column of permanent zeroes
+ * would read as "nobody clicked" rather than "X does not say", so the ones that
+ * cannot be measured are named once, in plain words, and never given a tile.
+ */
 const overview = ref(null);
+const posts = ref([]);
+const accounts = ref([]);
 const loading = ref(true);
+const tab = ref('posts');
 
 const from = ref(new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10));
 const to = ref(new Date().toISOString().slice(0, 10));
+
+const params = () => ({ from: from.value, to: to.value });
 
 async function load() {
     loading.value = true;
 
     try {
-        const { data } = await api.get('analytics/overview', { params: { from: from.value, to: to.value } });
-        overview.value = data;
+        const [ov, tp, ta] = await Promise.all([
+            api.get('analytics/overview', { params: params() }),
+            api.get('analytics/top-posts', { params: { ...params(), limit: 50 } }),
+            api.get('analytics/accounts', { params: { ...params(), limit: 50 } }),
+        ]);
+
+        overview.value = ov.data;
+        posts.value = tp.data.data;
+        accounts.value = ta.data.top;
     } finally {
         loading.value = false;
     }
@@ -21,66 +51,175 @@ async function load() {
 
 onMounted(load);
 
-/** Peak of the series, used to scale the bars. Guarded so an all-zero range does not divide by zero. */
+/** Presets, because typing two dates to see last week is work nobody should do. */
+const ranges = [
+    { label: '7 ngày', days: 6 },
+    { label: '28 ngày', days: 27 },
+    { label: '90 ngày', days: 89 },
+];
+
+function pick(days) {
+    const end = new Date();
+    const start = new Date(Date.now() - days * 86400000);
+
+    to.value = end.toISOString().slice(0, 10);
+    from.value = start.toISOString().slice(0, 10);
+}
+
+watch([from, to], load);
+
+const engagement = computed(() => overview.value?.engagement ?? {});
+const coverage = computed(() => overview.value?.coverage ?? {});
+
+/*
+ * Whether these numbers speak for the whole pool.
+ *
+ * Metrics come back only to the account that owns the tweet, so an account
+ * whose token has expired contributes nothing at all -- and a dashboard that
+ * quietly averages over the accounts it could reach reads as a statement about
+ * every account. Six of the seven tried on this install answered Unauthorized.
+ */
+const partial = computed(() => coverage.value.publishable > 0
+    && coverage.value.synced < coverage.value.publishable);
+
+const n = (value) => Number(value ?? 0).toLocaleString('vi-VN');
+
+const pct = (value) => `${Number(value ?? 0).toFixed(2)}%`;
+
+/** Peak of the series, used to scale the bars. Guarded against an all-zero range. */
 const peak = computed(() => {
     const daily = overview.value?.daily ?? [];
 
     return Math.max(1, ...daily.map((d) => Number(d.published) + Number(d.failed)));
 });
 
-function barHeight(row) {
-    return `${((Number(row.published) + Number(row.failed)) / peak.value) * 100}%`;
-}
+const barHeight = (row) => `${((Number(row.published) + Number(row.failed)) / peak.value) * 100}%`;
 
 function publishedShare(row) {
     const total = Number(row.published) + Number(row.failed);
 
     return total === 0 ? 0 : (Number(row.published) / total) * 100;
 }
+
+const measured = (value) => (value
+    ? new Date(value.replace(' ', 'T')).toLocaleString('vi-VN', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+    : '—');
 </script>
 
 <template>
     <div class="px-5 py-5 lg:px-8 lg:py-6">
         <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <h1 class="text-xl font-semibold">Analytics</h1>
-            <div class="flex items-center gap-2">
-                <input v-model="from" type="date" class="xp-field w-auto" @change="load">
+            <div>
+                <h1 class="text-xl font-semibold">Analytics</h1>
+                <p class="mt-1 text-[13px] text-neutral-500">
+                    Số liệu X trả về cho từng bài đã đăng, theo tài khoản đứng sau nó.
+                </p>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <div class="flex overflow-hidden rounded-md border border-neutral-200 bg-white">
+                    <button
+                        v-for="r in ranges"
+                        :key="r.label"
+                        class="px-2.5 py-1.5 text-[12.5px] transition hover:bg-neutral-50"
+                        @click="pick(r.days)"
+                    >{{ r.label }}</button>
+                </div>
+
+                <input v-model="from" type="date" class="xp-field w-auto">
                 <span class="text-neutral-400">→</span>
-                <input v-model="to" type="date" class="xp-field w-auto" @change="load">
+                <input v-model="to" type="date" class="xp-field w-auto">
             </div>
         </div>
 
         <p v-if="loading" class="text-neutral-500">Đang tải…</p>
 
         <template v-else-if="overview">
-            <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <!--
+                Said before any number, not after.
+
+                Without ClickHouse every engagement figure here is empty, which
+                looks exactly like a month in which nobody engaged.
+            -->
+            <div
+                v-if="!coverage.clickhouse"
+                class="mb-4 rounded-lg bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200"
+            >
+                <span class="font-medium">Chưa đọc được ClickHouse.</span>
+                Phần tương tác bên dưới sẽ trống — đó là thiếu kết nối, không phải không ai tương tác.
+            </div>
+
+            <div
+                v-else-if="partial"
+                class="mb-4 rounded-lg bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200"
+            >
+                <span class="font-medium">
+                    Chỉ {{ n(coverage.synced) }}/{{ n(coverage.publishable) }} tài khoản đang đồng bộ số liệu.
+                </span>
+                X chỉ trả số liệu cho chính tài khoản sở hữu bài, nên tài khoản hết hạn token
+                không đóng góp gì — các con số dưới đây chỉ nói thay cho phần đang đồng bộ.
+            </div>
+
+            <!-- Delivery: what this system did. -->
+            <p class="mb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-500">Đăng bài</p>
+            <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div v-for="tile in [
-                    { label: 'Đã đăng', value: overview.published, tone: 'text-green-700' },
-                    { label: 'Thất bại', value: overview.failed, tone: 'text-red-700' },
-                    { label: 'Đang chờ', value: overview.pending, tone: 'text-amber-700' },
-                    { label: 'Tỉ lệ thành công', value: `${overview.success_rate}%`, tone: 'text-neutral-900' },
-                    { label: 'Tài khoản sẵn sàng', value: overview.active_accounts, tone: 'text-neutral-900' },
+                    { label: 'Đã đăng', value: n(overview.published), tone: 'text-neutral-900' },
+                    { label: 'Thất bại', value: n(overview.failed), tone: overview.failed ? 'text-red-700' : 'text-neutral-400' },
+                    { label: 'Tỉ lệ thành công', value: pct(overview.success_rate), tone: 'text-neutral-900' },
+                    { label: 'Đang chờ', value: n(overview.pending), tone: overview.pending ? 'text-amber-700' : 'text-neutral-400' },
                 ]" :key="tile.label" class="xp-card px-4 py-3">
                     <p class="text-xs text-neutral-500">{{ tile.label }}</p>
-                    <p class="mt-0.5 text-xl font-semibold" :class="tile.tone">
-                        {{ typeof tile.value === 'number' ? tile.value.toLocaleString('vi-VN') : tile.value }}
-                    </p>
+                    <p class="mt-0.5 text-xl font-semibold tabular-nums" :class="tile.tone">{{ tile.value }}</p>
                 </div>
             </div>
 
-            <div class="grid gap-4 lg:grid-cols-3">
-                <!-- Volume -->
+            <!-- Engagement: what X did with it. -->
+            <p class="mb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-500">
+                Tương tác — {{ n(engagement.posts) }} bài có số liệu
+            </p>
+            <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                <div v-for="tile in [
+                    { label: 'Lượt hiển thị', value: n(engagement.impressions) },
+                    { label: 'Tương tác', value: n(engagement.engagements) },
+                    { label: 'Tỉ lệ tương tác', value: pct(engagement.engagement_rate) },
+                    { label: 'Xem hồ sơ', value: n(engagement.profile_visits) },
+                    { label: 'Thích', value: n(engagement.likes) },
+                    { label: 'Đăng lại', value: n(engagement.retweets) },
+                ]" :key="tile.label" class="xp-card px-4 py-3">
+                    <p class="text-xs text-neutral-500">{{ tile.label }}</p>
+                    <p class="mt-0.5 text-xl font-semibold tabular-nums">{{ tile.value }}</p>
+                </div>
+            </div>
+
+            <!--
+                Cumulative, and it has to say so.
+
+                The counters X returns are running totals for the life of a post,
+                so there is no honest way to slice them into what a given day
+                earned. Letting a reader assume otherwise would be the same lie
+                as a proxy showing healthy from a check five days old.
+            -->
+            <p class="mb-5 text-[11.5px] leading-relaxed text-neutral-500">
+                Các con số tương tác là tổng luỹ kế từ khi bài được đăng, đọc ở lần đo gần nhất
+                trong khoảng đã chọn — không phải phần phát sinh riêng trong khoảng đó.
+                X không trả về lượt bấm link, lượt mở chi tiết và người theo dõi mới qua API,
+                nên trang này không có các cột đó.
+            </p>
+
+            <div class="mb-5 grid gap-4 lg:grid-cols-3">
                 <div class="xp-card p-5 lg:col-span-2">
                     <h2 class="mb-4 text-[15px] font-semibold">Lượng bài đăng theo ngày</h2>
 
-                    <div v-if="overview.daily.length" class="flex h-48 items-end gap-1">
+                    <div v-if="overview.daily.length" class="flex h-40 items-end gap-1">
                         <div
                             v-for="row in overview.daily"
                             :key="row.day"
                             class="group relative flex-1"
                             :style="{ height: barHeight(row) }"
                         >
-                            <!-- Failed sits behind, published fills from the bottom -->
                             <div class="h-full w-full rounded-t bg-red-200">
                                 <div class="w-full rounded-t bg-neutral-900" :style="{ height: `${publishedShare(row)}%` }"></div>
                             </div>
@@ -99,18 +238,133 @@ function publishedShare(row) {
                     </div>
                 </div>
 
-                <!-- Failure breakdown -->
                 <div class="xp-card p-5">
                     <h2 class="mb-4 text-[15px] font-semibold">Nguyên nhân lỗi</h2>
 
                     <ul v-if="overview.failures.length" class="space-y-2.5">
                         <li v-for="row in overview.failures" :key="row.error_code" class="flex items-baseline justify-between gap-2 text-[13px]">
                             <code class="truncate rounded bg-neutral-100 px-1.5 py-0.5 text-xs">{{ row.error_code || '—' }}</code>
-                            <span class="shrink-0 font-medium">{{ Number(row.total).toLocaleString('vi-VN') }}</span>
+                            <span class="shrink-0 font-medium tabular-nums">{{ n(row.total) }}</span>
                         </li>
                     </ul>
 
-                    <p v-else class="text-[13px] text-neutral-500">Không có lỗi nào. </p>
+                    <p v-else class="text-[13px] text-neutral-500">Không có lỗi nào.</p>
+                </div>
+            </div>
+
+            <!--
+                Per tweet, not per post.
+
+                A post fans out to many accounts, and the whole reason to open
+                this screen is that the same text does not perform the same from
+                every handle. Rolling them into one row would hide exactly the
+                thing being looked for.
+            -->
+            <div class="xp-card overflow-hidden">
+                <div class="flex items-center gap-1 border-b border-neutral-200 px-4">
+                    <button
+                        v-for="t in [{ key: 'posts', label: 'Theo bài đăng' }, { key: 'accounts', label: 'Theo tài khoản' }]"
+                        :key="t.key"
+                        class="-mb-px border-b-2 px-3 py-2.5 text-[13px] font-medium transition"
+                        :class="tab === t.key
+                            ? 'border-neutral-900 text-neutral-900'
+                            : 'border-transparent text-neutral-500 hover:text-neutral-800'"
+                        @click="tab = t.key"
+                    >{{ t.label }}</button>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table v-if="tab === 'posts'" class="w-full text-[13px]">
+                        <thead class="border-b border-neutral-200 text-left text-[11.5px] uppercase tracking-wide text-neutral-500">
+                            <tr>
+                                <th class="px-4 py-2.5 font-medium">Tài khoản</th>
+                                <th class="px-4 py-2.5 font-medium">Nội dung</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Hiển thị</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Tương tác</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Tỉ lệ</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Thích</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Đăng lại</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Trả lời</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Trích</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Lưu</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Xem hồ sơ</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Đo lúc</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            <tr v-for="row in posts" :key="row.tweet_id" class="border-b border-neutral-100 last:border-b-0 hover:bg-neutral-50">
+                                <td class="whitespace-nowrap px-4 py-2.5 font-medium">
+                                    <a
+                                        :href="`https://x.com/${row.username}/status/${row.tweet_id}`"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="text-blue-600 hover:underline"
+                                    >@{{ row.username ?? '—' }}</a>
+                                </td>
+                                <td class="max-w-[280px] truncate px-4 py-2.5 text-neutral-600" :title="row.excerpt">{{ row.excerpt || '—' }}</td>
+                                <td class="px-4 py-2.5 text-right font-medium tabular-nums">{{ n(row.impressions) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">{{ n(row.engagements) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums" :class="Number(row.engagement_rate) > 0 ? 'text-neutral-900' : 'text-neutral-400'">
+                                    {{ pct(row.engagement_rate) }}
+                                </td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.likes) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.retweets) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.replies) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.quotes) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.bookmarks) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.profile_visits) }}</td>
+                                <td class="whitespace-nowrap px-4 py-2.5 text-right text-[12px] text-neutral-400">{{ measured(row.measured_at) }}</td>
+                            </tr>
+
+                            <tr v-if="!posts.length">
+                                <td colspan="12" class="px-4 py-8 text-center text-[13px] text-neutral-500">
+                                    Chưa có bài nào được đo trong khoảng này. Số liệu chỉ lấy về cho bài đăng trong 72 giờ gần nhất.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <table v-else class="w-full text-[13px]">
+                        <thead class="border-b border-neutral-200 text-left text-[11.5px] uppercase tracking-wide text-neutral-500">
+                            <tr>
+                                <th class="px-4 py-2.5 font-medium">Tài khoản</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Bài</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Hiển thị</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Tương tác</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Tỉ lệ</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Thích</th>
+                                <th class="px-4 py-2.5 text-right font-medium">Xem hồ sơ</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            <tr v-for="row in accounts" :key="row.account_id" class="border-b border-neutral-100 last:border-b-0 hover:bg-neutral-50">
+                                <td class="whitespace-nowrap px-4 py-2.5 font-medium">
+                                    <a
+                                        v-if="row.username"
+                                        :href="`https://x.com/${row.username}`"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="text-blue-600 hover:underline"
+                                    >@{{ row.username }}</a>
+                                    <span v-else class="text-neutral-400">#{{ row.account_id }}</span>
+                                </td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">{{ n(row.posts) }}</td>
+                                <td class="px-4 py-2.5 text-right font-medium tabular-nums">{{ n(row.impressions) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">{{ n(row.engagements) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums">{{ pct(row.engagement_rate) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.likes) }}</td>
+                                <td class="px-4 py-2.5 text-right tabular-nums text-neutral-600">{{ n(row.profile_visits) }}</td>
+                            </tr>
+
+                            <tr v-if="!accounts.length">
+                                <td colspan="7" class="px-4 py-8 text-center text-[13px] text-neutral-500">
+                                    Chưa có tài khoản nào có số liệu trong khoảng này.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </template>

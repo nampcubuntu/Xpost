@@ -10,13 +10,17 @@ use App\Models\Post;
 use App\Models\PostTarget;
 use App\Models\XAccount;
 use App\Services\Analytics\AnalyticsQueryService;
+use App\Services\Analytics\ClickHouseConnection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 class AnalyticsController extends Controller
 {
-    public function __construct(private readonly AnalyticsQueryService $analytics) {}
+    public function __construct(
+        private readonly AnalyticsQueryService $analytics,
+        private readonly ClickHouseConnection $clickhouse,
+    ) {}
 
     /** Headline numbers for the dashboard. */
     public function overview(Request $request): JsonResponse
@@ -44,6 +48,8 @@ class AnalyticsController extends Controller
             'scheduled_posts' => Post::query()->where('status', 'scheduled')->count(),
             'daily' => $this->analytics->dailyVolume($from, $to),
             'failures' => $this->analytics->failureBreakdown($from, $to),
+            'engagement' => $this->analytics->engagementTotals($from, $to),
+            'coverage' => $this->coverage(),
         ]);
     }
 
@@ -71,9 +77,74 @@ class AnalyticsController extends Controller
     {
         [$from, $to] = $this->range($request);
 
+        $rows = $this->analytics->topAccounts($from, $to, (int) $request->query('limit', 20));
+
+        // A row identified only by id is a row nobody can act on: the whole
+        // point of ranking accounts is knowing which handle to look at.
+        $usernames = XAccount::query()
+            ->whereKey(array_column($rows, 'account_id'))
+            ->pluck('username', 'id');
+
         return response()->json([
-            'top' => $this->analytics->topAccounts($from, $to, (int) $request->query('limit', 20)),
+            'top' => array_map(
+                static fn (array $row): array => $row + ['username' => $usernames[$row['account_id']] ?? null],
+                $rows,
+            ),
         ]);
+    }
+
+    /** One row per published tweet, the way X Premium shows a post. */
+    public function posts(Request $request): JsonResponse
+    {
+        [$from, $to] = $this->range($request);
+
+        $rows = $this->analytics->topPosts($from, $to, min((int) $request->query('limit', 25), 100));
+
+        // ClickHouse holds ids; the names live in MySQL. Two lookups for the
+        // whole page rather than one per row.
+        $accounts = XAccount::query()
+            ->whereKey(array_column($rows, 'account_id'))
+            ->pluck('username', 'id');
+
+        $posts = Post::query()
+            ->whereKey(array_column($rows, 'post_id'))
+            ->pluck('body', 'id');
+
+        return response()->json([
+            'data' => array_map(static function (array $row) use ($accounts, $posts): array {
+                $body = (string) ($posts[$row['post_id']] ?? '');
+
+                return $row + [
+                    'username' => $accounts[$row['account_id']] ?? null,
+                    'excerpt' => mb_strlen($body) > 90 ? mb_substr($body, 0, 90).'…' : $body,
+                ];
+            }, $rows),
+        ]);
+    }
+
+    /**
+     * How much of the account pool these numbers actually speak for.
+     *
+     * Metrics come back only to the account that owns the tweet, so an account
+     * whose token has expired contributes nothing -- and a dashboard that
+     * averages over the accounts it could reach, with no note of the ones it
+     * could not, reads as a statement about all of them. Six of the seven
+     * accounts tried on this install answered Unauthorized.
+     *
+     * @return array{synced: int, publishable: int, clickhouse: bool}
+     */
+    private function coverage(): array
+    {
+        return [
+            'synced' => XAccount::query()
+                ->publishable()
+                ->where('last_synced_at', '>=', now()->subDay())
+                ->count(),
+            'publishable' => XAccount::query()->publishable()->count(),
+            // Without it every engagement figure on the page is empty, which
+            // looks identical to nobody having engaged.
+            'clickhouse' => $this->clickhouse->enabled(),
+        ];
     }
 
     /** @return array{0: Carbon, 1: Carbon} */

@@ -77,8 +77,17 @@ class SyncTweetMetrics implements ShouldQueue
         });
     }
 
-    /** @param  Collection<string, PostTarget>  $targets */
-    private function toRows(array $tweets, Collection $targets, XAccount $account): array
+    /**
+     * X's payload turned into stored rows.
+     *
+     * Public because this mapping is the thing worth testing: every number
+     * on the analytics screen is whatever this function decided, and the
+     * difference between X's engagement count and a sum of the visible
+     * parts is invisible everywhere downstream.
+     *
+     * @param  Collection<string, PostTarget>  $targets
+     */
+    public function toRows(array $tweets, Collection $targets, XAccount $account): array
     {
         $now = now()->format('Y-m-d H:i:s');
         $rows = [];
@@ -97,12 +106,34 @@ class SyncTweetMetrics implements ShouldQueue
 
             $impressions = (int) ($nonPublic['impression_count'] ?? $organic['impression_count'] ?? 0);
 
-            $engagements = (int) ($public['like_count'] ?? 0)
-                + (int) ($public['retweet_count'] ?? 0)
-                + (int) ($public['reply_count'] ?? 0)
-                + (int) ($public['quote_count'] ?? 0)
-                + (int) ($nonPublic['url_link_clicks'] ?? 0)
-                + (int) ($nonPublic['user_profile_clicks'] ?? 0);
+            /*
+             * X's own engagement count, not a sum of the parts.
+             *
+             * This used to add likes, retweets, replies, quotes and clicks
+             * together, which is not what X means by the word. X counts every
+             * interaction with the post -- expands, hashtag and username taps,
+             * media opens, follows off the post -- so the hand-rolled sum reads
+             * lower than the number in X's own analytics for the same post, and
+             * the engagement rate built on it reads lower still.
+             *
+             * The live response for one of this install's posts:
+             *
+             *   "non_public_metrics": {
+             *     "engagements": 0, "impression_count": 3, "user_profile_clicks": 0
+             *   }
+             *
+             * Kept as a fallback rather than dropped: organic_metrics does not
+             * carry engagements, so an account whose non-public metrics are out
+             * of the 30-day window still gets an approximate figure instead of a
+             * zero that looks like a post nobody touched.
+             */
+            $engagements = isset($nonPublic['engagements'])
+                ? (int) $nonPublic['engagements']
+                : (int) ($public['like_count'] ?? 0)
+                    + (int) ($public['retweet_count'] ?? 0)
+                    + (int) ($public['reply_count'] ?? 0)
+                    + (int) ($public['quote_count'] ?? 0)
+                    + (int) ($nonPublic['user_profile_clicks'] ?? 0);
 
             $rows[] = [
                 'snapshot_time' => $now,
@@ -116,6 +147,13 @@ class SyncTweetMetrics implements ShouldQueue
                 'replies' => (int) ($public['reply_count'] ?? 0),
                 'quotes' => (int) ($public['quote_count'] ?? 0),
                 'bookmarks' => (int) ($public['bookmark_count'] ?? 0),
+                /*
+                 * Not returned at this access level -- neither
+                 * non_public_metrics nor organic_metrics carries it in the
+                 * live response, so this is structurally zero. Still read,
+                 * in case the field comes back, but nothing may present it
+                 * as a measured zero.
+                 */
                 'url_link_clicks' => (int) ($nonPublic['url_link_clicks'] ?? 0),
                 'user_profile_clicks' => (int) ($nonPublic['user_profile_clicks'] ?? 0),
                 'engagements' => $engagements,

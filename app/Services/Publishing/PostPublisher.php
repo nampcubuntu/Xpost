@@ -19,6 +19,7 @@ use App\Services\X\XAppSelector;
 use App\Services\X\XCardService;
 use App\Services\X\XMediaUploader;
 use App\Services\X\XRateLimiter;
+use App\Support\ProxyFailure;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -223,7 +224,21 @@ final class PostPublisher
                 return $this->defer($target, $this->backoffSeconds($target->attempts), 'internal_error');
             }
 
-            return $this->fail($target, 'internal_error', $e->getMessage());
+            /*
+             * Named for the hop that failed, when it can be.
+             *
+             * This catch is where anything unforeseen lands, and "HTTP request
+             * returned status code 407" landed here -- a proxy's refusal filed
+             * as an internal error, with nothing saying which proxy, or that X
+             * had never seen the request.
+             */
+            $explained = ProxyFailure::fromThrowable($e, $account->proxy);
+
+            return $this->fail(
+                $target,
+                $explained === null ? 'internal_error' : 'proxy_rejected',
+                $explained ?? $e->getMessage()
+            );
         } finally {
             /*
              * Refund unless the post actually went out.
@@ -294,7 +309,10 @@ final class PostPublisher
 
             return $cardUri;
         } catch (\Throwable $e) {
-            $this->cardError = $e->getMessage();
+            // Through the explainer first: a card is minted seconds before the
+            // post that carries it and over the same proxy, so this is one of
+            // the likeliest places for a proxy's refusal to surface.
+            $this->cardError = ProxyFailure::fromThrowable($e, $account->proxy) ?? $e->getMessage();
 
             Log::channel('xpost')->warning('Card build failed, publishing without one', [
                 'target_id' => $target->id,

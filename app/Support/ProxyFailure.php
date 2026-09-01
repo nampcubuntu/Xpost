@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use App\Models\Proxy;
+use Illuminate\Http\Client\RequestException;
 use Throwable;
 
 /**
@@ -55,6 +56,24 @@ final class ProxyFailure
 
         if ($proxy === null) {
             return null;
+        }
+
+        /*
+         * A 407 that arrived as a response rather than as a failed tunnel.
+         *
+         * curl surfaces the proxy's refusal either way depending on the scheme
+         * and the proxy, and Laravel wraps the response form in a
+         * RequestException whose message is "HTTP request returned status code
+         * 407" -- which names neither the proxy nor what 407 means. That exact
+         * sentence is what reached the failed column.
+         */
+        if ($e instanceof RequestException && $e->response->status() === 407) {
+            return self::fromStatus(407, $proxy);
+        }
+
+        // The same thing having passed through a layer that kept only the text.
+        if (str_contains($message, 'status code 407')) {
+            return self::fromStatus(407, $proxy);
         }
 
         // curl 7 through a proxy is the CONNECT tunnel being refused, and it

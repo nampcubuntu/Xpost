@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import api from '../lib/api';
 import { listen, socketState } from '../lib/echo';
 import { useAuthStore } from '../stores/auth';
+import ErrorPopover from '../components/ErrorPopover.vue';
 
 const props = defineProps({ id: { type: String, required: true } });
 
@@ -338,21 +339,17 @@ const retryFailed = () => act(() => api.post(`posts/${props.id}/retry-failed`));
                                 </a>
 
                                 <!--
-                                    The message, not just the code. This column
-                                    showed "card_unavailable" with the reason
-                                    hidden in a title attribute -- and the
-                                    reason is the whole content: "HTTP request
-                                    returned status code 407" is a proxy
-                                    refusing authentication, which is a thing
-                                    someone can go and fix. The code alone is
-                                    not.
+                                    The same mark the list uses, so the two
+                                    pages do not explain a failure two different
+                                    ways. The code stays visible here because
+                                    this page is already the detail -- what it
+                                    should not do is print a paragraph into a
+                                    table cell.
                                 -->
-                                <div v-else-if="target.error_message" class="max-w-xs">
-                                    <p class="font-medium text-red-600">{{ target.error_code }}</p>
-                                    <p class="text-[12px] text-neutral-600" :title="target.error_message">
-                                        {{ target.error_message }}
-                                    </p>
-                                </div>
+                                <span v-else-if="target.error_message" class="inline-flex items-center gap-1.5">
+                                    <ErrorPopover :code="target.error_code" :message="target.error_message" />
+                                    <span class="text-[12px] text-red-600">{{ target.error_code }}</span>
+                                </span>
 
                                 <span v-else class="text-neutral-400">—</span>
                             </td>

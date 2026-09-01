@@ -5,6 +5,7 @@ import api from '../lib/api';
 import { useAuthStore } from '../stores/auth';
 import { listen, socketState } from '../lib/echo';
 import NavIcon from '../components/NavIcon.vue';
+import ErrorPopover from '../components/ErrorPopover.vue';
 import PhonePreview from '../components/PhonePreview.vue';
 
 const auth = useAuthStore();
@@ -1028,29 +1029,32 @@ const destinationHost = (url) => {
                                     {{ post.promoted_only ? 'Promoted' : 'Organic' }}
                                 </p>
 
-                                <p v-if="post.progress.total" class="mt-1 text-xs text-neutral-500">
-                                    {{ post.progress.published }}/{{ post.progress.total }}
-                                    <span v-if="post.progress.failed" class="text-red-600">· {{ post.progress.failed }} lỗi</span>
-                                </p>
-
                                 <!--
-                                    The reason, on the row.
+                                    A mark, not a paragraph.
 
-                                    A count is not a diagnosis: "1 lỗi" sent
+                                    A count is not a diagnosis -- "1 lỗi" sent
                                     whoever read it into the post to find out
-                                    what happened, and on a fan-out where one
-                                    dead proxy refused every target, into the
-                                    post to read the same sentence a thousand
-                                    times. Clamped to two lines so a long
-                                    message cannot push the row taller than the
-                                    thumbnail beside it.
+                                    what happened. Printing the sentence here
+                                    instead put three lines of prose in a column
+                                    two words wide. The mark says something went
+                                    wrong; the popover says what.
                                 -->
-                                <p
-                                    v-if="post.last_error"
-                                    class="mt-1 max-w-[220px] text-xs leading-snug text-red-600"
-                                    :title="post.last_error.message"
-                                >
-                                    <span class="line-clamp-2">{{ post.last_error.message }}</span>
+                                <p v-if="post.progress.total" class="mt-1 flex items-center gap-1.5 text-xs text-neutral-500">
+                                    <span>{{ post.progress.published }}/{{ post.progress.total }}</span>
+                                    <span v-if="post.progress.failed" class="text-red-600">· {{ post.progress.failed }} lỗi</span>
+
+                                    <ErrorPopover
+                                        v-if="post.last_error"
+                                        :code="post.last_error.code"
+                                        :message="post.last_error.message"
+                                    >
+                                        <template #actions>
+                                            <RouterLink
+                                                :to="{ name: 'posts.show', params: { id: String(post.id) } }"
+                                                class="text-[12px] text-blue-600 transition hover:underline"
+                                            >Xem từng tài khoản</RouterLink>
+                                        </template>
+                                    </ErrorPopover>
                                 </p>
                             </td>
 

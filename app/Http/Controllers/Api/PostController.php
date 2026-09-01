@@ -43,7 +43,12 @@ class PostController extends Controller
                 'sampleTarget.account:id,username,name,avatar_url',
                 // Qualified: ofMany joins a derived table, so a bare `id` or
                 // `post_id` here is ambiguous and MySQL refuses the query.
-                'lastFailedTarget:post_targets.id,post_targets.post_id,post_targets.error_code,post_targets.error_message',
+                'lastFailedTarget:post_targets.id,post_targets.post_id,post_targets.x_account_id,post_targets.error_code,post_targets.error_message,post_targets.updated_at',
+                // Named, not just coded: which account it published as and
+                // which proxy it went out through. Two queries for the page,
+                // not two per row.
+                'lastFailedTarget.account:id,username,proxy_id',
+                'lastFailedTarget.account.proxy:id,host,port',
             ])
             ->status($request->query('status'))
             ->type($request->query('type'))
@@ -269,7 +274,7 @@ class PostController extends Controller
 
         $targets = PostTarget::query()
             ->where('post_id', $post->id)
-            ->with('account:id,username,avatar_url')
+            ->with(['account:id,username,avatar_url,proxy_id', 'account.proxy:id,host,port'])
             ->when($request->query('status'), fn ($q, $status) => $q->where('status', $status))
             ->orderBy('id')
             ->paginate(min((int) $request->query('per_page', 50), 200))

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Resources;
 
 use App\Models\PostTarget;
+use App\Support\FailureContext;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -27,6 +28,9 @@ class PostTargetResource extends JsonResource
             'duration_ms' => $this->duration_ms,
             'error_code' => $this->error_code,
             'error_message' => $this->error_message,
+            // Which account, which proxy, which stage, and who to go and
+            // fix -- a code on its own says the publisher gave up, not why.
+            'failure' => FailureContext::for($this->resource),
             'account' => $this->whenLoaded('account', fn () => [
                 'id' => $this->account->id,
                 'username' => $this->account->username,

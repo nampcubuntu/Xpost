@@ -2,9 +2,38 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
 const props = defineProps({
-    code: { type: String, default: null },
-    message: { type: String, default: null },
+    /** The whole `failure` object from the API, or null. */
+    failure: { type: Object, default: null },
 });
+
+const code = computed(() => props.failure?.code ?? null);
+const message = computed(() => props.failure?.message ?? '');
+
+/*
+ * Who to go and fix, said in one line at the top.
+ *
+ * A code is a status, not a diagnosis: `internal_error` says the publisher
+ * reached its catch-all, which is equally true of a dead proxy, a bug here, and
+ * a library throwing something nobody anticipated. Three problems, three
+ * owners, and nothing on the page telling them apart.
+ */
+const blame = computed(() => ({
+    proxy: { label: 'Lỗi từ proxy', tone: 'bg-amber-50 text-amber-800' },
+    x: { label: 'X từ chối', tone: 'bg-red-50 text-red-700' },
+    account: { label: 'Lỗi từ tài khoản', tone: 'bg-red-50 text-red-700' },
+    xpost: { label: 'Lỗi từ Xpost', tone: 'bg-red-50 text-red-700' },
+}[props.failure?.blame] ?? { label: 'Lỗi khi đăng', tone: 'bg-red-50 text-red-700' }));
+
+/** Only the rows that have something in them. */
+const facts = computed(() => [
+    { label: 'Giai đoạn', value: props.failure?.stage },
+    { label: 'Tài khoản', value: props.failure?.account },
+    { label: 'Proxy', value: props.failure?.proxy },
+    {
+        label: 'Lúc',
+        value: props.failure?.at ? new Date(props.failure.at).toLocaleString('vi-VN') : null,
+    },
+].filter((row) => row.value));
 
 /*
  * A mark on the row, and the reason a click away.
@@ -111,11 +140,18 @@ onBeforeUnmount(unbind);
  * Hovering should answer "what kind of problem" without a click; the rest is
  * what the panel is for.
  */
-const summary = computed(() => (props.message ?? '').split('. ')[0]);
+const summary = computed(() => `${blame.value.label} — ${message.value.split('. ')[0]}`);
 
 async function copy() {
     try {
-        await navigator.clipboard.writeText(`${props.code}\n${props.message}`);
+        // The whole picture, because what gets pasted into a supplier ticket
+        // has to say which proxy and which stage, not just the sentence.
+        await navigator.clipboard.writeText([
+            `[${code.value}] ${message.value}`,
+            ...facts.value.map((row) => `${row.label}: ${row.value}`),
+            props.failure?.raw ? `Nguyên văn: ${props.failure.raw}` : null,
+        ].filter(Boolean).join('\n'));
+
         copied.value = true;
     } catch {
         // A denied clipboard is not worth an error state -- the text is on
@@ -151,16 +187,42 @@ async function copy() {
                 :style="style"
                 @click.stop
             >
-                <div class="flex items-center gap-2 border-b border-neutral-100 bg-red-50 px-3 py-2">
-                    <span class="text-[12px] font-semibold text-red-700">Lỗi khi đăng</span>
-                    <code v-if="code" class="ml-auto rounded bg-white/70 px-1.5 py-0.5 font-mono text-[11px] text-red-700">{{ code }}</code>
+                <!--
+                    Who to go and fix, before what went wrong. A proxy refusing
+                    and X refusing are the same red badge on the row and two
+                    different jobs for whoever reads this.
+                -->
+                <div class="flex items-center gap-2 border-b border-neutral-100 px-3 py-2" :class="blame.tone">
+                    <span class="text-[12px] font-semibold">{{ blame.label }}</span>
+                    <code v-if="code" class="ml-auto rounded bg-white/70 px-1.5 py-0.5 font-mono text-[11px]">{{ code }}</code>
                 </div>
 
                 <!-- Selectable and wrapped: the whole point is reading it, and
                      these messages carry a host:port worth copying by hand. -->
-                <p class="max-h-52 select-text overflow-y-auto whitespace-pre-wrap px-3 py-2.5 text-[12.5px] leading-relaxed text-neutral-700">
+                <p class="max-h-40 select-text overflow-y-auto whitespace-pre-wrap px-3 py-2.5 text-[12.5px] leading-relaxed text-neutral-700">
                     {{ message }}
                 </p>
+
+                <!--
+                    Where it came from. The account and the proxy are the two
+                    things that make a failure actionable, and neither was on
+                    the page anywhere.
+                -->
+                <dl v-if="facts.length" class="border-t border-neutral-100 px-3 py-2 text-[12px]">
+                    <div v-for="row in facts" :key="row.label" class="flex gap-2 py-0.5">
+                        <dt class="w-[68px] shrink-0 text-neutral-400">{{ row.label }}</dt>
+                        <dd class="min-w-0 flex-1 break-words text-neutral-700">{{ row.value }}</dd>
+                    </div>
+                </dl>
+
+                <!-- Kept when the message was rewritten, so nothing is hidden
+                     from whoever is comparing this against a log. -->
+                <details v-if="failure?.raw" class="border-t border-neutral-100 px-3 py-1.5">
+                    <summary class="cursor-pointer text-[11.5px] text-neutral-400 hover:text-neutral-600">Nguyên văn</summary>
+                    <p class="mt-1 select-text whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-neutral-500">
+                        {{ failure.raw }}
+                    </p>
+                </details>
 
                 <div class="flex items-center gap-3 border-t border-neutral-100 px-3 py-2">
                     <button class="text-[12px] text-neutral-600 transition hover:text-neutral-900" @click="copy">

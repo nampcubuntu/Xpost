@@ -1045,8 +1045,7 @@ const destinationHost = (url) => {
 
                                     <ErrorPopover
                                         v-if="post.last_error"
-                                        :code="post.last_error.code"
-                                        :message="post.last_error.message"
+                                        :failure="post.last_error"
                                     >
                                         <template #actions>
                                             <RouterLink

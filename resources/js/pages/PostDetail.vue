@@ -347,7 +347,7 @@ const retryFailed = () => act(() => api.post(`posts/${props.id}/retry-failed`));
                                     table cell.
                                 -->
                                 <span v-else-if="target.error_message" class="inline-flex items-center gap-1.5">
-                                    <ErrorPopover :code="target.error_code" :message="target.error_message" />
+                                    <ErrorPopover :failure="target.failure" />
                                     <span class="text-[12px] text-red-600">{{ target.error_code }}</span>
                                 </span>
 

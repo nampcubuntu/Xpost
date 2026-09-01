@@ -206,4 +206,47 @@ class ProxyFailureTest extends TestCase
         $this->assertSame('proxy_rejected', $row['last_error']['code']);
         $this->assertStringContainsString('157.15.39.126:21466', $row['last_error']['message']);
     }
+
+    #[Test]
+    public function a_failure_naming_some_other_host_is_not_blamed_on_the_proxy(): void
+    {
+        /*
+         * Found in real rows, not in theory. Reverb being down fails a publish
+         * with "Pusher error: cURL error 28: Failed to connect to 127.0.0.1
+         * port 8080", and matching on the curl number alone blamed the
+         * account's proxy -- which was working -- in a sentence that read
+         * perfectly and pointed at the wrong machine.
+         */
+        $explained = ProxyFailure::fromThrowable(
+            new RuntimeException('Pusher error: cURL error 28: Failed to connect to 127.0.0.1 port 8080 after 10013 ms'),
+            $this->proxy()
+        );
+
+        $this->assertNull($explained, 'a failure against 127.0.0.1:8080 was blamed on the proxy');
+    }
+
+    #[Test]
+    public function a_failure_naming_this_proxy_still_is(): void
+    {
+        // The other half: the guard must not refuse the case it was built for.
+        $explained = ProxyFailure::fromThrowable(
+            new RuntimeException('cURL error 28: Failed to connect to 157.15.39.126 port 21466 after 30000 ms'),
+            $this->proxy()
+        );
+
+        $this->assertStringContainsString('157.15.39.126:21466', (string) $explained);
+    }
+
+    #[Test]
+    public function a_refused_tunnel_is_not_confused_by_the_destination_it_names(): void
+    {
+        // A CONNECT failure names X after "for https://…", and that is the
+        // destination, not evidence about where the fault lies.
+        $explained = ProxyFailure::fromThrowable(
+            new RuntimeException('cURL error 7: CONNECT tunnel failed, response 407 for https://api.x.com/2/tweets'),
+            $this->proxy()
+        );
+
+        $this->assertStringContainsString('từ chối xác thực', (string) $explained);
+    }
 }

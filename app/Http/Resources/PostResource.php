@@ -6,6 +6,7 @@ namespace App\Http\Resources;
 
 use App\Models\Post;
 use App\Services\Publishing\TweetTextWeigher;
+use App\Support\FailureContext;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -93,10 +94,10 @@ class PostResource extends JsonResource
              * times over. Loaded as a relation so a page of twenty-five posts
              * is one extra query, not twenty-five.
              */
-            'last_error' => $this->whenLoaded('lastFailedTarget', fn () => $this->lastFailedTarget ? [
-                'code' => $this->lastFailedTarget->error_code,
-                'message' => $this->lastFailedTarget->error_message,
-            ] : null),
+            'last_error' => $this->whenLoaded(
+                'lastFailedTarget',
+                fn () => FailureContext::for($this->lastFailedTarget)
+            ),
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

@@ -76,6 +76,20 @@ final class ProxyFailure
             return self::fromStatus(407, $proxy);
         }
 
+        /*
+         * A transport error that names some other endpoint is not this proxy's.
+         *
+         * "Pusher error: cURL error 28: Failed to connect to 127.0.0.1 port
+         * 8080" is Reverb being down, and matching on the curl number alone
+         * blamed the account's proxy for it -- on rows where the proxy was
+         * fine. That is exactly the wrong turn this class exists to prevent,
+         * and it took real data to notice, because the sentence it produced
+         * read perfectly.
+         */
+        if (self::namesAnotherHost($message, $proxy)) {
+            return null;
+        }
+
         // curl 7 through a proxy is the CONNECT tunnel being refused, and it
         // carries the proxy's own status when there was one.
         if (str_contains($message, 'CONNECT tunnel failed')) {
@@ -101,6 +115,28 @@ final class ProxyFailure
         }
 
         return null;
+    }
+
+    /**
+     * Whether curl is complaining about somewhere other than this proxy.
+     *
+     * curl names the endpoint it could not reach -- "Failed to connect to HOST
+     * port N" -- and when that is not the proxy, the proxy is not the story.
+     * Only the connect phrasing is matched: a refused CONNECT tunnel names the
+     * *destination* after "for https://…", which is X and says nothing about
+     * where the fault lies.
+     */
+    private static function namesAnotherHost(string $message, Proxy $proxy): bool
+    {
+        preg_match_all('/connect to\s+([A-Za-z0-9._-]+)\s+port\s+(\d+)/i', $message, $matches, PREG_SET_ORDER);
+
+        foreach ($matches as [, $host, $port]) {
+            if (strcasecmp($host, (string) $proxy->host) !== 0 || (int) $port !== (int) $proxy->port) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** host:port, because that is what the proxy page shows and sorts by. */

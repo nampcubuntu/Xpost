@@ -43,17 +43,47 @@ final class SpendGuard
     /**
      * What X will charge for this target, in cents.
      *
-     * A link is the expensive case by an order of magnitude, and the card path
-     * always carries one -- so this is not a rounding difference, it decides
-     * whether a day costs sixty dollars or eight hundred.
+     * A link is the expensive case by an order of magnitude -- $0.20 against
+     * $0.015 -- so this is not a rounding difference. At a thousand accounts a
+     * day it is the difference between $450 a month and $6,000.
+     *
+     * The rate turns on where the URL actually lands in the request body, which
+     * is TweetPayload's rule and is decidable here:
+     *
+     *   no media, no card  ->  the URL is appended to the text
+     *   media attached     ->  it goes in media.call_to_actions
+     *   card attached      ->  it lives inside the card
+     *
+     * Only the first is unambiguously "a post with a URL". X's price list says
+     * that phrase and does not say where it looks, so the other two are charged
+     * at the link rate by default -- overcharging a budget stops a campaign
+     * early, undercharging it lets one run thirteen times over.
+     *
+     * Set XPOST_PRICE_CARD_AS_LINK=false once the Usage page has been read and
+     * the cheap rate is confirmed for cards.
      */
     public function costCentsFor(PostTarget $target): int
     {
-        $rate = trim((string) $target->rendered_url) !== ''
+        $rate = $this->carriesLink($target)
             ? (float) config('xpost.pricing.post_with_link_usd', 0.20)
             : (float) config('xpost.pricing.post_usd', 0.015);
 
         return (int) round($rate * 100);
+    }
+
+    private function carriesLink(PostTarget $target): bool
+    {
+        if (trim((string) $target->rendered_url) === '') {
+            return false;
+        }
+
+        // Whether a card will be minted is not known yet -- the reservation
+        // happens before resolveCard(), because the budget has to be held
+        // before anything is spent. Media is known, and media alone is enough
+        // to keep the URL out of the text.
+        $inText = blank($target->card_uri) && empty($target->rendered_media_ids);
+
+        return $inText || (bool) config('xpost.pricing.card_counts_as_link', true);
     }
 
     /**

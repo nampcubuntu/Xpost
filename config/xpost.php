@@ -171,6 +171,21 @@ return [
     'pricing' => [
         'post_usd' => (float) env('XPOST_PRICE_POST_USD', 0.015),
         'post_with_link_usd' => (float) env('XPOST_PRICE_POST_LINK_USD', 0.20),
+
+        /*
+         * Whether X counts a card or a media call-to-action as "a post with a
+         * URL", or only a link sitting in the text.
+         *
+         * Its own price list says the phrase and not where it looks, and the
+         * two readings are 13x apart. Left true, which overcharges the budget
+         * if cards are cheap -- a campaign that stops early is recoverable, one
+         * that runs thirteen times over its ceiling is an invoice.
+         *
+         * The answer is in the Developer Console under Usage, which itemises
+         * "Post creation" against "Post creation (with URL)". Set this false
+         * once the card posts show up on the cheap line.
+         */
+        'card_counts_as_link' => (bool) env('XPOST_PRICE_CARD_AS_LINK', true),
     ],
 
     /*

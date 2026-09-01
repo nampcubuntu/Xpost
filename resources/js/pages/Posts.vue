@@ -594,11 +594,27 @@ const destinationHost = (url) => {
                     <!-- Spending is real money; only an admin moves the ceiling. -->
                     <button
                         v-else-if="auth.can('manage_budget')"
-                        class="mt-0.5 text-[11px] text-blue-600 hover:underline"
+                        class="mt-0.5 text-[11px] hover:underline"
+                        :class="budget.budget_usd === null ? 'font-medium text-amber-700' : 'text-blue-600'"
                         @click="startEditBudget"
                     >
-                        {{ budget.budget_usd === null ? 'Đặt trần chi tiêu' : 'Sửa trần' }}
+                        {{ budget.budget_usd === null ? '⚠ Chưa đặt trần chi tiêu' : 'Sửa trần' }}
                     </button>
+
+                    <!--
+                        Said out loud rather than left as a quiet link.
+                        No ceiling is the state where a scheduling mistake bills
+                        four figures: a post with a link is $0.20, so one loop
+                        across a thousand accounts is $200 before anyone looks
+                        at the screen. It reads as a normal default until it is
+                        priced.
+                    -->
+                    <p
+                        v-if="budget.budget_usd === null && auth.can('manage_budget')"
+                        class="mt-0.5 max-w-[240px] text-[10.5px] leading-snug text-neutral-500"
+                    >
+                        Không có trần thì một lần lên lịch nhầm chạy tới hết số dư ở X.
+                    </p>
                 </div>
 
                 <RouterLink :to="{ name: 'composer' }" class="xp-btn-primary">

@@ -27,8 +27,9 @@ call "%~dp0infra.bat" up
 
 echo.
 echo Starting Windows processes...
-start "Xpost web"       cmd /k "%PHP%" "%ART%" serve --host=127.0.0.1 --port=8000
-start "Xpost scheduler" cmd /k "%PHP%" "%ART%" schedule:work
+
+start "Xpost web"       cmd /k ""%PHP%" "%ART%" serve --host=127.0.0.1 --port=8000"
+start "Xpost scheduler" cmd /k ""%PHP%" "%ART%" schedule:work"
 
 if /I "%1"=="tunnel" goto tunnel
 

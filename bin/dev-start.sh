@@ -128,6 +128,20 @@ else
     ok "schedule:work"
 fi
 
+say "Websocket"
+
+# In WSL for the same reason Horizon is: it needs Redis on the container
+# network, and the supervisor has to outlive the wsl.exe call that starts it.
+#
+# A failure here is reported and not fatal. The pages that use it keep polling,
+# so a stopped Reverb costs a few seconds of staleness rather than a broken app
+# -- and stopping the whole startup over it would be the wrong trade.
+if wsl -d "$DISTRO" -- bash -lc "pgrep -f '[a]rtisan reverb' >/dev/null" 2>/dev/null; then
+    skip "reverb đã chạy"
+else
+    wsl -d "$DISTRO" bash -lc "cd /mnt/d/Xpost && bash bin/reverb-start.sh" 2>&1 | tail -2
+fi
+
 say "Kiểm tra"
 
 check() {

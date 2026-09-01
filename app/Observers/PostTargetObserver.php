@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Observers;
 
 use App\Enums\TargetStatus;
+use App\Events\PostProgressChanged;
 use App\Models\Post;
 use App\Models\PostTarget;
 
@@ -49,6 +50,32 @@ class PostTargetObserver
                 ->where($leaving, '>', 0)
                 ->decrement($leaving);
         }
+
+        $this->announce($target);
+    }
+
+    /**
+     * Tell the page the counters moved.
+     *
+     * Read back rather than computed here: the increments above are atomic and
+     * other workers are running the same statements, so the only numbers worth
+     * sending are the ones the database now holds. This is the one read, and
+     * the event uses it as given.
+     *
+     * Forced on the last target, because the throttle would otherwise swallow
+     * exactly the message that matters -- a run whose final target lands inside
+     * a throttled second would sit at 999/1000 until something else happened,
+     * and nothing else is going to happen.
+     */
+    private function announce(PostTarget $target): void
+    {
+        $post = Post::withoutGlobalScopes()->find($target->post_id);
+
+        if ($post === null) {
+            return;
+        }
+
+        PostProgressChanged::announce($post, force: $post->targets_pending === 0);
     }
 
     /** Only the three states the UI counts have a column. */

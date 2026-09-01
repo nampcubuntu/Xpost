@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../lib/api';
 import { useAuthStore } from '../stores/auth';
+import { listen } from '../lib/echo';
 import NavIcon from '../components/NavIcon.vue';
 import PhonePreview from '../components/PhonePreview.vue';
 
@@ -221,9 +222,25 @@ function closeMenus() {
     menuFor.value = null;
 }
 
+let stopListening = () => {};
+
 onMounted(() => {
     document.addEventListener('click', closeMenus);
     document.addEventListener('visibilitychange', onVisibility);
+
+    /*
+     * The team channel, not one per post. An operator watching this list is
+     * watching every row on it, and a subscription per row would mean a
+     * hundred of them and a resubscribe on every filter change.
+     */
+    const teamId = auth.user?.current_team_id;
+
+    if (teamId) {
+        stopListening = listen(`team.${teamId}`, '.post.progress', (payload) => {
+            socketLive.value = true;
+            applyProgress(payload);
+        });
+    }
 });
 
 onUnmounted(() => {
@@ -231,6 +248,8 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', onVisibility);
     // Or the page keeps polling for a list nobody is looking at any more.
     clearTimeout(refreshTimer);
+    // And keeps patching rows it no longer renders.
+    stopListening();
 });
 
 async function act(post, request, describe) {
@@ -352,7 +371,18 @@ async function load(silent = false) {
  */
 const REFRESH_MS = 5000;
 
+/*
+ * Backed off hard while the socket is delivering.
+ *
+ * Not switched off: a websocket that has quietly stopped looks exactly like one
+ * with nothing to say, and the first sign either way would be a counter frozen
+ * at 40%. A slow poll is the check that the socket is still telling the truth,
+ * and it costs one request a minute during a run.
+ */
+const SOCKET_REFRESH_MS = 60000;
+
 let refreshTimer;
+const socketLive = ref(false);
 
 /** Posts with work still to do. Nothing else can change on its own. */
 const inFlight = computed(() => posts.value.some((post) => ['scheduled', 'publishing'].includes(post.status)
@@ -367,7 +397,34 @@ function scheduleRefresh() {
         return;
     }
 
-    refreshTimer = setTimeout(() => load(true), REFRESH_MS);
+    refreshTimer = setTimeout(() => load(true), socketLive.value ? SOCKET_REFRESH_MS : REFRESH_MS);
+}
+
+/**
+ * Patch one row from a broadcast.
+ *
+ * Patched rather than reloaded: the message carries exactly the fields that
+ * changed, and re-fetching the page on every tick would undo the point of not
+ * polling. A post that is not on screen -- filtered out, or on another page --
+ * is ignored, which is also why the slow poll stays: it is what brings in a row
+ * that has since become relevant.
+ */
+function applyProgress(payload) {
+    const row = posts.value.find((post) => post.id === payload.id);
+
+    if (! row) {
+        return;
+    }
+
+    row.status = payload.status;
+    row.progress = { ...row.progress, ...payload.progress };
+
+    // The status badge reads its label from the row, and the broadcast carries
+    // the value rather than the translated string.
+    row.status_label = statuses.find((entry) => entry.value === payload.status)?.label ?? row.status_label;
+
+    // A run that has just finished has nothing left to poll for.
+    scheduleRefresh();
 }
 
 /*
@@ -493,7 +550,7 @@ const destinationHost = (url) => {
                             <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-75"></span>
                             <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-green-600"></span>
                         </span>
-                        Đang tự cập nhật
+                        {{ socketLive ? 'Cập nhật tức thì' : 'Đang tự cập nhật' }}
                     </span>
                 </p>
             </div>

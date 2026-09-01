@@ -21,7 +21,21 @@ final class AnalyticsQueryService
 {
     public function __construct(private readonly ClickHouseConnection $clickhouse) {}
 
-    /** Publish volume per day for the current team. */
+    /**
+     * Publish volume per day, counted in destinations rather than attempts.
+     *
+     * The daily rollup sums one row per publish attempt, so a target that
+     * failed twice and then landed contributes three. The tile beside this
+     * chart counts post_targets, which is one row per destination -- and the
+     * two read the same word on the same screen while disagreeing: fifty
+     * against twenty-eight on this install.
+     *
+     * Counting distinct target_id makes the chart mean what the tile means.
+     * It reads the raw events rather than the rollup because the rollup
+     * stores sums, and a sum of attempts cannot be turned back into a count
+     * of destinations. Attempts are still returned, separately and named as
+     * what they are.
+     */
     public function dailyVolume(Carbon $from, Carbon $to, ?int $postId = null): array
     {
         $teamId = TeamContext::id() ?? 0;
@@ -32,26 +46,25 @@ final class AnalyticsQueryService
 
         $filter = $postId ? 'AND post_id = :post_id' : '';
 
-        $rows = $this->clickhouse->select(<<<SQL
+        return $this->clickhouse->select(<<<SQL
             SELECT
-                day,
-                sumMerge(published) AS published,
-                sumMerge(failed)    AS failed,
-                round(avgMerge(avg_duration)) AS avg_duration_ms
-            FROM xpost_daily_stats
+                toDate(event_time)                              AS day,
+                uniqExactIf(target_id, status = 'published')    AS published,
+                uniqExactIf(target_id, status = 'failed')       AS failed,
+                count()                                         AS attempts,
+                round(avg(duration_ms))                         AS avg_duration_ms
+            FROM xpost_publish_events
             WHERE team_id = :team_id
-              AND day BETWEEN :from AND :to
+              AND event_time BETWEEN :from AND :to
               {$filter}
             GROUP BY day
             ORDER BY day
         SQL, array_filter([
             'team_id' => $teamId,
-            'from' => $from->toDateString(),
-            'to' => $to->toDateString(),
+            'from' => $from->toDateTimeString(),
+            'to' => $to->toDateTimeString(),
             'post_id' => $postId,
         ], static fn ($v) => $v !== null));
-
-        return $rows;
     }
 
     /** Top failure reasons, so an operator can see what is actually breaking. */
@@ -208,6 +221,64 @@ final class AnalyticsQueryService
         ]);
 
         return $rows[0] ?? [];
+    }
+
+    /**
+     * Impressions and engagements earned per day, not carried into it.
+     *
+     * The counters X returns are running totals for the life of a post, so
+     * plotting them straight gives a line that only ever climbs -- a shape that
+     * says "we grew" on a week when nothing happened. What a reader wants, and
+     * what X Premium's own chart shows, is the day's own gain.
+     *
+     * So: the highest reading each tweet had on each day, minus the reading it
+     * had the day before. Clamped at zero, because X does revise counts down
+     * and a negative day would read as impressions being taken away.
+     *
+     * The window opens a week before the range. Metrics are only collected for
+     * the 72 hours after a post goes out, so a week is wide enough for every
+     * tweet still being measured to have its earlier readings in view -- without
+     * which its first day inside the range would show its whole life's total as
+     * though it had all arrived at once.
+     */
+    public function dailyEngagement(Carbon $from, Carbon $to): array
+    {
+        if (! $this->clickhouse->enabled()) {
+            return [];
+        }
+
+        return $this->clickhouse->select(<<<'SQL'
+            SELECT
+                day,
+                sum(greatest(0, impressions_gain)) AS impressions,
+                sum(greatest(0, engagements_gain)) AS engagements
+            FROM (
+                SELECT
+                    day,
+                    impressions - lagInFrame(impressions, 1, 0) OVER w AS impressions_gain,
+                    engagements - lagInFrame(engagements, 1, 0) OVER w AS engagements_gain
+                FROM (
+                    SELECT
+                        tweet_id,
+                        toDate(snapshot_time) AS day,
+                        max(impressions)      AS impressions,
+                        max(engagements)      AS engagements
+                    FROM xpost_tweet_metrics
+                    WHERE team_id = :team_id AND snapshot_time >= :lookback
+                    GROUP BY tweet_id, day
+                )
+                WINDOW w AS (PARTITION BY tweet_id ORDER BY day
+                             ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+            )
+            WHERE day BETWEEN :from AND :to
+            GROUP BY day
+            ORDER BY day
+        SQL, [
+            'team_id' => TeamContext::id() ?? 0,
+            'lookback' => $from->copy()->subDays(7)->toDateTimeString(),
+            'from' => $from->toDateString(),
+            'to' => $to->toDateString(),
+        ]);
     }
 
     /**

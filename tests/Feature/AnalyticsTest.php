@@ -332,6 +332,193 @@ class AnalyticsTest extends TestCase
         $this->assertSame(5.0, (float) $rows[0]['engagement_rate']);
     }
 
+    #[Test]
+    public function published_is_dated_by_when_it_was_published(): void
+    {
+        /*
+         * Not by when the row was last written. The two agree only until
+         * something touches a target after it goes out -- a retry, a status
+         * correction, a backfill -- and then posts move into days they were not
+         * published on, with nothing on the page able to show it.
+         */
+        $post = Post::factory()->for($this->team)->create();
+        $account = XAccount::factory()->for($this->team)->create();
+
+        $target = PostTarget::factory()->for($post)->create([
+            'team_id' => $this->team->id,
+            'x_account_id' => $account->id,
+            'status' => 'published',
+            'published_at' => now()->subDays(40),
+        ]);
+
+        // Something writes to the row today. The post did not move.
+        $target->forceFill(['updated_at' => now()])->save();
+
+        $this->actingAs($this->user->refresh())
+            ->getJson('/api/v1/analytics/overview')
+            ->assertOk()
+            ->assertJsonPath('published', 0);
+    }
+
+    #[Test]
+    public function pending_is_a_state_rather_than_a_period(): void
+    {
+        /*
+         * A queued post is queued now. Filtering it by the chosen date range
+         * answers a question nobody asked and hides work that is actually
+         * waiting -- the one number on this screen someone might act on
+         * immediately.
+         */
+        $post = Post::factory()->for($this->team)->create();
+        $account = XAccount::factory()->for($this->team)->create();
+
+        PostTarget::factory()->for($post)->create([
+            'team_id' => $this->team->id,
+            'x_account_id' => $account->id,
+            'status' => 'queued',
+            'created_at' => now()->subMonths(3),
+            'updated_at' => now()->subMonths(3),
+        ]);
+
+        $this->actingAs($this->user->refresh())
+            ->getJson('/api/v1/analytics/overview?from='.now()->subDay()->toDateString())
+            ->assertOk()
+            ->assertJsonPath('pending', 1);
+    }
+
+    #[Test]
+    public function the_volume_chart_counts_destinations_not_attempts(): void
+    {
+        /*
+         * A target that failed twice and then landed is one post delivered, and
+         * the event log holds three rows for it. Counting rows made the chart
+         * read fifty where the tile beside it read twenty-eight -- the same word
+         * on the same screen, two numbers, nothing saying which was which.
+         */
+        $clickhouse = app(ClickHouseConnection::class);
+
+        if (! $clickhouse->enabled()) {
+            $this->markTestSkipped('can ClickHouse dang chay');
+        }
+
+        $teamId = 92_000 + random_int(1, 9_000);
+        $now = now();
+
+        $event = fn (string $status, int $minutesAgo): array => [
+            'event_time' => $now->copy()->subMinutes($minutesAgo)->format('Y-m-d H:i:s'),
+            'team_id' => $teamId, 'post_id' => 1, 'target_id' => 55, 'account_id' => 1,
+            'app_id' => 1, 'status' => $status, 'error_code' => '', 'duration_ms' => 100,
+            'tweet_id' => $status === 'published' ? 'tw-3' : '',
+        ];
+
+        // One destination, three attempts, ending in success.
+        $clickhouse->insert('xpost_publish_events', [
+            $event('failed', 30),
+            $event('failed', 20),
+            $event('published', 10),
+        ], array_keys($event('failed', 0)));
+
+        $rows = $this->asTeam($teamId, fn () => app(AnalyticsQueryService::class)
+            ->dailyVolume($now->copy()->subDay(), $now->copy()->addMinute()));
+
+        $this->assertSame(
+            1,
+            (int) array_sum(array_column($rows, 'published')),
+            'retries were counted as extra posts delivered',
+        );
+
+        // And the retries stay visible, as what they are.
+        $this->assertSame(3, (int) array_sum(array_column($rows, 'attempts')));
+    }
+
+    #[Test]
+    public function the_daily_series_adds_up_to_the_total_it_sits_under(): void
+    {
+        /*
+         * The counters X returns are running totals, so a chart of them only
+         * ever climbs -- a shape that says "we grew" on a week when nothing
+         * happened. The series shows each day's own gain instead, and the proof
+         * the arithmetic is right is that the days sum to the headline above
+         * them.
+         */
+        $clickhouse = app(ClickHouseConnection::class);
+
+        if (! $clickhouse->enabled()) {
+            $this->markTestSkipped('can ClickHouse dang chay');
+        }
+
+        $teamId = 93_000 + random_int(1, 9_000);
+        $now = now();
+
+        $snapshot = fn (int $daysAgo, int $impressions, int $engagements): array => [
+            'snapshot_time' => $now->copy()->subDays($daysAgo)->format('Y-m-d H:i:s'),
+            'team_id' => $teamId, 'post_id' => 1, 'account_id' => 1, 'tweet_id' => 'tw-4',
+            'impressions' => $impressions, 'likes' => 0, 'retweets' => 0, 'replies' => 0,
+            'quotes' => 0, 'bookmarks' => 0, 'url_link_clicks' => 0,
+            'user_profile_clicks' => 0, 'engagements' => $engagements,
+        ];
+
+        // One tweet climbing over three days: 40, then 70, then 100.
+        $clickhouse->insert('xpost_tweet_metrics', [
+            $snapshot(2, 40, 4),
+            $snapshot(1, 70, 6),
+            $snapshot(0, 100, 9),
+        ], array_keys($snapshot(0, 0, 0)));
+
+        [$daily, $totals] = $this->asTeam($teamId, function () use ($now): array {
+            $service = app(AnalyticsQueryService::class);
+            $from = $now->copy()->subDays(3);
+            $to = $now->copy()->addMinute();
+
+            return [$service->dailyEngagement($from, $to), $service->engagementTotals($from, $to)];
+        });
+
+        $this->assertSame(
+            (int) $totals['impressions'],
+            (int) array_sum(array_column($daily, 'impressions')),
+            'the daily gains do not add up to the total above them',
+        );
+
+        // And no single day carries the whole life of the post.
+        $this->assertSame([40, 30, 30], array_map('intval', array_column($daily, 'impressions')));
+        $this->assertSame(9, (int) array_sum(array_column($daily, 'engagements')));
+    }
+
+    #[Test]
+    public function a_revised_down_count_does_not_become_a_negative_day(): void
+    {
+        // X does revise counts down. A negative bar reads as impressions being
+        // taken away, which is not a thing that happens.
+        $clickhouse = app(ClickHouseConnection::class);
+
+        if (! $clickhouse->enabled()) {
+            $this->markTestSkipped('can ClickHouse dang chay');
+        }
+
+        $teamId = 94_000 + random_int(1, 9_000);
+        $now = now();
+
+        $snapshot = fn (int $daysAgo, int $impressions): array => [
+            'snapshot_time' => $now->copy()->subDays($daysAgo)->format('Y-m-d H:i:s'),
+            'team_id' => $teamId, 'post_id' => 1, 'account_id' => 1, 'tweet_id' => 'tw-5',
+            'impressions' => $impressions, 'likes' => 0, 'retweets' => 0, 'replies' => 0,
+            'quotes' => 0, 'bookmarks' => 0, 'url_link_clicks' => 0,
+            'user_profile_clicks' => 0, 'engagements' => 0,
+        ];
+
+        $clickhouse->insert('xpost_tweet_metrics', [
+            $snapshot(1, 500),
+            $snapshot(0, 480),
+        ], array_keys($snapshot(0, 0)));
+
+        $daily = $this->asTeam($teamId, fn () => app(AnalyticsQueryService::class)
+            ->dailyEngagement($now->copy()->subDays(2), $now->copy()->addMinute()));
+
+        foreach ($daily as $day) {
+            $this->assertGreaterThanOrEqual(0, (int) $day['impressions'], 'a day went negative');
+        }
+    }
+
     /** Run a closure with a given team in context. */
     private function asTeam(int $teamId, callable $callback): mixed
     {

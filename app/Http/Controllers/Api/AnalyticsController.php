@@ -27,28 +27,42 @@ class AnalyticsController extends Controller
     {
         [$from, $to] = $this->range($request);
 
-        $targets = PostTarget::query()
-            ->whereBetween('updated_at', [$from, $to])
-            ->selectRaw('status, COUNT(*) as aggregate')
-            ->groupBy('status')
-            ->pluck('aggregate', 'status');
+        /*
+         * Published is dated by when it was published, not by when the row
+         * was last written. They agree today only because nothing has
+         * touched a target since it went out; the first retry, status
+         * correction or backfill that does would silently move posts into
+         * the wrong day, and a chart built on that cannot be checked
+         * against anything.
+         */
+        $published = PostTarget::query()
+            ->where('status', TargetStatus::Published->value)
+            ->whereBetween('published_at', [$from, $to])
+            ->count();
 
-        $published = (int) $targets->get(TargetStatus::Published->value, 0);
-        $failed = (int) $targets->get(TargetStatus::Failed->value, 0);
+        // Failures have no moment of their own, so the last write is the
+        // best there is.
+        $failed = PostTarget::query()
+            ->where('status', TargetStatus::Failed->value)
+            ->whereBetween('updated_at', [$from, $to])
+            ->count();
+
         $attempted = $published + $failed;
 
         return response()->json([
             'range' => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
             'published' => $published,
             'failed' => $failed,
-            'pending' => (int) $targets->get(TargetStatus::Pending->value, 0)
-                + (int) $targets->get(TargetStatus::Queued->value, 0),
+            'pending' => PostTarget::query()
+                ->whereIn('status', [TargetStatus::Pending->value, TargetStatus::Queued->value])
+                ->count(),
             'success_rate' => $attempted > 0 ? round($published / $attempted * 100, 2) : 0.0,
             'active_accounts' => XAccount::query()->publishable()->count(),
             'scheduled_posts' => Post::query()->where('status', 'scheduled')->count(),
             'daily' => $this->analytics->dailyVolume($from, $to),
             'failures' => $this->analytics->failureBreakdown($from, $to),
             'engagement' => $this->analytics->engagementTotals($from, $to),
+            'engagement_daily' => $this->analytics->dailyEngagement($from, $to),
             'coverage' => $this->coverage(),
         ]);
     }

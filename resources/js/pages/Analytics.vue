@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import api from '../lib/api';
+import TrendChart from '../components/TrendChart.vue';
 
 /*
  * What X will actually tell us about a post.
@@ -86,20 +87,63 @@ const n = (value) => Number(value ?? 0).toLocaleString('vi-VN');
 
 const pct = (value) => `${Number(value ?? 0).toFixed(2)}%`;
 
-/** Peak of the series, used to scale the bars. Guarded against an all-zero range. */
-const peak = computed(() => {
-    const daily = overview.value?.daily ?? [];
+/*
+ * Every day in the range, including the ones nothing happened on.
+ *
+ * Both series arrive with rows only for days that have data, so plotting
+ * them as they come joins the 26th straight to the 29th and draws a slope
+ * across three days that were flat. A quiet day is information.
+ */
+function densify(rows, keys) {
+    const byDay = new Map(rows.map((r) => [String(r.day), r]));
+    const out = [];
 
-    return Math.max(1, ...daily.map((d) => Number(d.published) + Number(d.failed)));
+    for (let d = new Date(from.value); d <= new Date(to.value); d.setDate(d.getDate() + 1)) {
+        const day = d.toISOString().slice(0, 10);
+        const row = byDay.get(day);
+
+        out.push({ day, ...Object.fromEntries(keys.map((k) => [k, Number(row?.[k] ?? 0)])) });
+    }
+
+    return out;
+}
+
+const volumeDays = computed(() => densify(overview.value?.daily ?? [], ['published', 'failed', 'attempts']));
+const engagementDays = computed(() => densify(overview.value?.engagement_daily ?? [], ['impressions', 'engagements']));
+
+const engagementSeries = computed(() => [
+    { key: 'impressions', label: 'Lượt hiển thị', color: '#1d9bf0', values: engagementDays.value.map((d) => d.impressions) },
+    { key: 'engagements', label: 'Tương tác', color: '#00ba7c', values: engagementDays.value.map((d) => d.engagements) },
+]);
+
+const volumeSeries = computed(() => [
+    { key: 'published', label: 'Đã đăng', color: '#0f172a', values: volumeDays.value.map((d) => d.published) },
+    { key: 'failed', label: 'Thất bại', color: '#f4a4a4', values: volumeDays.value.map((d) => d.failed) },
+]);
+
+const chartDays = computed(() => volumeDays.value.map((d) => d.day));
+
+/*
+ * The chart is a record of what happened; the tile is what still exists.
+ *
+ * A post deleted from Xpost still went out, so its destinations stay in the
+ * event log and leave the two counts apart -- thirty against twenty-eight
+ * here. Both are right, and a page showing the same word twice with two
+ * numbers has to say which is which rather than let a reader decide one of
+ * them is broken.
+ */
+const deletedInChart = computed(() => {
+    const charted = volumeDays.value.reduce((sum, d) => sum + d.published + d.failed, 0);
+    const current = Number(overview.value?.published ?? 0) + Number(overview.value?.failed ?? 0);
+
+    return Math.max(0, charted - current);
 });
 
-const barHeight = (row) => `${((Number(row.published) + Number(row.failed)) / peak.value) * 100}%`;
-
-function publishedShare(row) {
-    const total = Number(row.published) + Number(row.failed);
-
-    return total === 0 ? 0 : (Number(row.published) / total) * 100;
-}
+/** Retries are the difference between attempts and destinations. */
+const retries = computed(() => volumeDays.value.reduce(
+    (sum, d) => sum + Math.max(0, d.attempts - d.published - d.failed),
+    0,
+));
 
 const measured = (value) => (value
     ? new Date(value.replace(' ', 'T')).toLocaleString('vi-VN', {
@@ -209,33 +253,38 @@ const measured = (value) => (value
                 nên trang này không có các cột đó.
             </p>
 
+            <!--
+                Two charts, because they answer two different questions.
+
+                The engagement line is what X did with the posts; the volume
+                bars are what this system managed to send. Stacking them into
+                one axis would put a number in the low thousands beside one in
+                the low tens and flatten the smaller of the two into the floor.
+            -->
             <div class="mb-5 grid gap-4 lg:grid-cols-3">
                 <div class="xp-card p-5 lg:col-span-2">
-                    <h2 class="mb-4 text-[15px] font-semibold">Lượng bài đăng theo ngày</h2>
+                    <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+                        <h2 class="text-[15px] font-semibold">Hiển thị và tương tác theo ngày</h2>
 
-                    <div v-if="overview.daily.length" class="flex h-40 items-end gap-1">
-                        <div
-                            v-for="row in overview.daily"
-                            :key="row.day"
-                            class="group relative flex-1"
-                            :style="{ height: barHeight(row) }"
-                        >
-                            <div class="h-full w-full rounded-t bg-red-200">
-                                <div class="w-full rounded-t bg-neutral-900" :style="{ height: `${publishedShare(row)}%` }"></div>
-                            </div>
-
-                            <div class="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded bg-neutral-900 px-2 py-1 text-[11px] text-white group-hover:block">
-                                {{ row.day }}: {{ row.published }} đăng, {{ row.failed }} lỗi
-                            </div>
+                        <div class="flex gap-4 text-[11.5px] text-neutral-500">
+                            <span v-for="s in engagementSeries" :key="s.key" class="flex items-center gap-1.5">
+                                <span class="h-2 w-2 rounded-full" :style="{ background: s.color }"></span>
+                                {{ s.label }}
+                            </span>
                         </div>
                     </div>
 
-                    <p v-else class="text-[13px] text-neutral-500">Chưa có dữ liệu trong khoảng này.</p>
+                    <p class="mb-3 text-[11.5px] text-neutral-500">
+                        Phần phát sinh trong ngày, không phải tổng luỹ kế.
+                    </p>
 
-                    <div class="mt-3 flex gap-4 text-xs text-neutral-500">
-                        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-neutral-900"></span> Đã đăng</span>
-                        <span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-red-200"></span> Thất bại</span>
-                    </div>
+                    <TrendChart
+                        v-if="engagementDays.length"
+                        :series="engagementSeries"
+                        :labels="chartDays"
+                        :height="200"
+                    />
+                    <p v-else class="py-10 text-center text-[13px] text-neutral-500">Chưa có số liệu trong khoảng này.</p>
                 </div>
 
                 <div class="xp-card p-5">
@@ -250,6 +299,46 @@ const measured = (value) => (value
 
                     <p v-else class="text-[13px] text-neutral-500">Không có lỗi nào.</p>
                 </div>
+            </div>
+
+            <div class="xp-card mb-5 p-5">
+                <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+                    <h2 class="text-[15px] font-semibold">Lượng bài đăng theo ngày</h2>
+
+                    <div class="flex gap-4 text-[11.5px] text-neutral-500">
+                        <span v-for="s in volumeSeries" :key="s.key" class="flex items-center gap-1.5">
+                            <span class="h-2 w-2 rounded-sm" :style="{ background: s.color }"></span>
+                            {{ s.label }}
+                        </span>
+                    </div>
+                </div>
+
+                <!--
+                    Destinations, not attempts.
+
+                    A target that failed twice and then landed is one post
+                    delivered, and the events table holds three rows for it.
+                    Counting rows made this chart read fifty where the tile
+                    beside it read twenty-eight.
+                -->
+                <p class="mb-3 text-[11.5px] text-neutral-500">
+                    Đếm theo đích đến, không phải lượt gọi API.
+                    <template v-if="retries > 0">
+                        Có {{ n(retries) }} lượt thử lại không hiện ở đây.
+                    </template>
+                    <template v-if="deletedInChart > 0">
+                        {{ n(deletedInChart) }} đích đến thuộc bài đã xoá nên có ở biểu đồ mà không có ở ô số liệu.
+                    </template>
+                </p>
+
+                <TrendChart
+                    v-if="volumeDays.length"
+                    :series="volumeSeries"
+                    :labels="chartDays"
+                    kind="bars"
+                    :height="160"
+                />
+                <p v-else class="py-8 text-center text-[13px] text-neutral-500">Chưa có dữ liệu trong khoảng này.</p>
             </div>
 
             <!--

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Enums\TargetStatus;
+use App\Events\MetricsSynced;
 use App\Exceptions\XApiException;
 use App\Models\PostTarget;
 use App\Models\XAccount;
@@ -61,6 +62,8 @@ class SyncTweetMetrics implements ShouldQueue
                 return;
             }
 
+            $stored = 0;
+
             foreach ($targets->keys()->chunk(100) as $ids) {
                 try {
                     $tweets = $clients->for($account)->tweetMetrics($ids->all());
@@ -70,10 +73,23 @@ class SyncTweetMetrics implements ShouldQueue
                     continue;
                 }
 
-                $recorder->recordSnapshots($this->toRows($tweets, $targets, $account));
+                $rows = $this->toRows($tweets, $targets, $account);
+                $stored += count($rows);
+
+                $recorder->recordSnapshots($rows);
             }
 
             $account->forceFill(['last_synced_at' => now()])->save();
+
+            /*
+             * Only when something landed. A run that reached X and came back
+             * with nothing has not changed a figure on any screen, and
+             * nudging pages to re-read the same numbers is work with no
+             * answer at the end of it.
+             */
+            if ($stored > 0) {
+                MetricsSynced::announce($this->teamId);
+            }
         });
     }
 

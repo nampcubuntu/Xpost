@@ -1,6 +1,8 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import api from '../lib/api';
+import { listen } from '../lib/echo';
+import { useAuthStore } from '../stores/auth';
 import TrendChart from '../components/TrendChart.vue';
 
 /*
@@ -21,6 +23,8 @@ import TrendChart from '../components/TrendChart.vue';
  * would read as "nobody clicked" rather than "X does not say", so the ones that
  * cannot be measured are named once, in plain words, and never given a tile.
  */
+const auth = useAuthStore();
+
 const overview = ref(null);
 const posts = ref([]);
 const accounts = ref([]);
@@ -45,12 +49,138 @@ async function load() {
         overview.value = ov.data;
         posts.value = tp.data.data;
         accounts.value = ta.data.top;
+        deliveryAt.value = new Date();
+        engagementAt.value = new Date();
     } finally {
         loading.value = false;
     }
 }
 
 onMounted(load);
+
+/*
+ * Two halves, two clocks.
+ *
+ * Publishing changes the moment a post goes out. Engagement changes only when
+ * SyncTweetMetrics runs, which is hourly and only for posts from the last 72
+ * hours. Wiring one and not the other would leave half the screen quietly
+ * hours old with nothing saying so, and pushing the engagement half on every
+ * publish would be motion without news.
+ *
+ * So each half listens for its own signal, and each says when it was last
+ * answered rather than implying both are current.
+ */
+const deliveryAt = ref(null);
+const engagementAt = ref(null);
+
+let stopProgress;
+let stopMetrics;
+let deliveryTimer;
+let engagementTimer;
+
+/*
+ * Nudges are coalesced rather than acted on one at a time.
+ *
+ * A fan-out across ten thousand accounts is a burst of publish events, and one
+ * request per event would be a request per post. The broadcast is already
+ * throttled on the server; this is the second half of the same guard, and it
+ * also means a slow response cannot pile requests behind it.
+ */
+function refreshDelivery() {
+    clearTimeout(deliveryTimer);
+
+    deliveryTimer = setTimeout(async () => {
+        // Nothing is worth fetching for a tab nobody is looking at.
+        if (document.hidden) {
+            return;
+        }
+
+        const { data } = await api.get('analytics/overview', { params: params() });
+
+        overview.value = data;
+        deliveryAt.value = new Date();
+    }, 2500);
+}
+
+function refreshEngagement() {
+    clearTimeout(engagementTimer);
+
+    engagementTimer = setTimeout(async () => {
+        if (document.hidden) {
+            return;
+        }
+
+        const [ov, tp, ta] = await Promise.all([
+            api.get('analytics/overview', { params: params() }),
+            api.get('analytics/top-posts', { params: { ...params(), limit: 50 } }),
+            api.get('analytics/accounts', { params: { ...params(), limit: 50 } }),
+        ]);
+
+        overview.value = ov.data;
+        posts.value = tp.data.data;
+        accounts.value = ta.data.top;
+        engagementAt.value = new Date();
+        deliveryAt.value = new Date();
+    }, 1500);
+}
+
+onMounted(() => {
+    /*
+     * One channel for the team, not one per post or per account.
+     *
+     * The same subscription both other pages use: a channel per row would mean
+     * a hundred subscriptions on a full screen and a resubscribe on every
+     * filter change.
+     */
+    const teamId = auth.user?.current_team_id;
+
+    if (teamId) {
+        stopProgress = listen(`team.${teamId}`, '.post.progress', refreshDelivery);
+        stopMetrics = listen(`team.${teamId}`, '.metrics.synced', refreshEngagement);
+    }
+});
+
+onUnmounted(() => {
+    clearTimeout(deliveryTimer);
+    clearTimeout(engagementTimer);
+    stopProgress?.();
+    stopMetrics?.();
+});
+
+/** How long ago a half was last answered, in words rather than a timestamp. */
+function ago(at) {
+    if (! at) {
+        return null;
+    }
+
+    const seconds = Math.round((Date.now() - at.getTime()) / 1000);
+
+    if (seconds < 60) {
+        return 'vừa xong';
+    }
+
+    const minutes = Math.round(seconds / 60);
+
+    return minutes < 60 ? `${minutes} phút trước` : `${Math.round(minutes / 60)} giờ trước`;
+}
+
+/*
+ * Recomputed on a tick, because "vừa xong" written once stays "vừa xong" for
+ * as long as the tab is open -- which is exactly the stale-freshness claim
+ * this label exists to prevent.
+ */
+const now = ref(Date.now());
+let clock;
+
+onMounted(() => {
+    clock = setInterval(() => (now.value = Date.now()), 30000);
+});
+
+onUnmounted(() => clearInterval(clock));
+
+const deliveryAgo = computed(() => (now.value, ago(deliveryAt.value)));
+const engagementAgo = computed(() => (now.value, ago(engagementAt.value)));
+
 
 /** Presets, because typing two dates to see last week is work nobody should do. */
 const ranges = [
@@ -227,7 +357,10 @@ const measured = (value) => {
             </div>
 
             <!-- Delivery: what this system did. -->
-            <p class="mb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-500">Đăng bài</p>
+            <div class="mb-2 flex items-baseline gap-2">
+                <p class="text-[11px] font-medium uppercase tracking-wider text-neutral-500">Đăng bài</p>
+                <span v-if="deliveryAgo" class="text-[11px] text-neutral-400">cập nhật {{ deliveryAgo }}</span>
+            </div>
             <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div v-for="tile in [
                     { label: 'Đã đăng', value: n(overview.published), tone: 'text-neutral-900' },
@@ -241,9 +374,17 @@ const measured = (value) => {
             </div>
 
             <!-- Engagement: what X did with it. -->
-            <p class="mb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-500">
-                Tương tác — {{ n(engagement.posts) }} bài có số liệu
-            </p>
+            <div class="mb-2 flex flex-wrap items-baseline gap-2">
+                <p class="text-[11px] font-medium uppercase tracking-wider text-neutral-500">
+                    Tương tác — {{ n(engagement.posts) }} bài có số liệu
+                </p>
+                <!-- Said out loud, because this half only moves when the
+                     hourly sync brings something back. Without it the two
+                     rows of tiles look equally current. -->
+                <span v-if="engagementAgo" class="text-[11px] text-neutral-400">
+                    cập nhật {{ engagementAgo }} · X trả số liệu mỗi giờ một lần
+                </span>
+            </div>
             <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                 <div v-for="tile in [
                     { label: 'Lượt hiển thị', value: n(engagement.impressions) },

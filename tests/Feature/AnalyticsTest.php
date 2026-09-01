@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Events\MetricsSynced;
 use App\Jobs\SyncTweetMetrics;
 use App\Models\Post;
 use App\Models\PostTarget;
@@ -11,8 +12,13 @@ use App\Models\Team;
 use App\Models\XAccount;
 use App\Services\Analytics\AnalyticsQueryService;
 use App\Services\Analytics\ClickHouseConnection;
+use App\Services\Analytics\MetricsRecorder;
+use App\Services\X\XApiClientFactory;
 use App\Support\TeamContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Broadcast;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -538,6 +544,139 @@ class AnalyticsTest extends TestCase
         $this->assertNotNull($found, 'a deleted post cannot be resolved for the table');
         $this->assertSame('nội dung đã đăng', $found->body);
         $this->assertNotNull($found->deleted_at, 'the row cannot say the post is gone');
+    }
+
+    #[Test]
+    public function a_sync_that_stored_something_nudges_the_team(): void
+    {
+        /*
+         * The engagement half of the analytics screen only moves when this job
+         * brings something back. Without a signal it sat at whatever it read on
+         * page load, hours stale, looking exactly as current as the publishing
+         * tiles beside it.
+         */
+        Event::fake([MetricsSynced::class]);
+
+        $this->syncOneAccount(impressions: 42);
+
+        Event::assertDispatched(
+            MetricsSynced::class,
+            fn (MetricsSynced $event) => $event->teamId === $this->team->id,
+        );
+    }
+
+    #[Test]
+    public function a_sync_that_stored_nothing_says_nothing(): void
+    {
+        /*
+         * A run that reached X and came back with nothing has not changed a
+         * figure on any screen. Nudging pages to re-read the same numbers is a
+         * request per account per hour with no answer at the end of it.
+         */
+        Event::fake([MetricsSynced::class]);
+
+        // X answers, and knows none of these ids.
+        $this->syncOneAccount(impressions: 0, respondWith: ['data' => []]);
+
+        Event::assertNotDispatched(MetricsSynced::class);
+    }
+
+    #[Test]
+    public function a_sweep_over_the_pool_is_one_nudge_not_one_per_account(): void
+    {
+        /*
+         * The sync is one job per account, so a run across ten thousand
+         * accounts finishes ten thousand times over a few minutes. A message
+         * each would be ten thousand describing one refresh, and every open tab
+         * would answer them.
+         *
+         * The throttle is a cache add rather than a read-then-write, because
+         * the workers finish inside the same second by design -- which is
+         * exactly when a check-then-set lets all of them through.
+         */
+        Event::fake([MetricsSynced::class]);
+
+        foreach (range(1, 25) as $ignored) {
+            MetricsSynced::announce($this->team->id);
+        }
+
+        Event::assertDispatchedTimes(MetricsSynced::class, 1);
+    }
+
+    #[Test]
+    public function one_team_being_nudged_does_not_silence_another(): void
+    {
+        // The throttle is per team, so a busy tenant must not swallow a quiet
+        // tenant's only refresh of the hour.
+        Event::fake([MetricsSynced::class]);
+
+        [$other] = $this->tenant();
+
+        MetricsSynced::announce($this->team->id);
+        MetricsSynced::announce($other->id);
+
+        Event::assertDispatchedTimes(MetricsSynced::class, 2);
+    }
+
+    #[Test]
+    public function the_nudge_carries_no_numbers(): void
+    {
+        /*
+         * On purpose. The page shows whatever range and filters someone chose,
+         * and a payload of totals would be totals for a different question --
+         * so it re-reads the figures it is actually displaying instead.
+         */
+        $event = new MetricsSynced($this->team->id);
+
+        $this->assertSame('metrics.synced', $event->broadcastAs());
+        $this->assertSame(
+            "private-team.{$this->team->id}",
+            $event->broadcastOn()[0]->name,
+            'the nudge went somewhere other pages are not listening',
+        );
+    }
+
+    #[Test]
+    public function reverb_being_down_does_not_lose_a_snapshot(): void
+    {
+        /*
+         * The caller has already spent an API call and stored the result. A
+         * broadcast failing afterwards is a page that refreshes late, not a
+         * reason to throw away work X was asked for.
+         */
+        Broadcast::shouldReceive('event')->andThrow(new \RuntimeException('Reverb down'));
+
+        MetricsSynced::announce($this->team->id);
+
+        $this->assertTrue(true, 'announce() let a broadcast failure escape');
+    }
+
+    /** Run the sync job against a faked X response. */
+    private function syncOneAccount(int $impressions, ?array $respondWith = null): void
+    {
+        $account = XAccount::factory()->for($this->team)->create();
+        $post = Post::factory()->for($this->team)->create();
+
+        PostTarget::factory()->for($post)->create([
+            'team_id' => $this->team->id,
+            'x_account_id' => $account->id,
+            'x_tweet_id' => '2092916567701107015',
+            'status' => 'published',
+            'published_at' => now()->subHour(),
+        ]);
+
+        Http::fake(['api.x.com/*' => Http::response($respondWith ?? [
+            'data' => [[
+                'id' => '2092916567701107015',
+                'non_public_metrics' => ['engagements' => 3, 'impression_count' => $impressions],
+                'public_metrics' => ['like_count' => 1, 'impression_count' => $impressions],
+            ]],
+        ])]);
+
+        (new SyncTweetMetrics($account->id, $this->team->id))->handle(
+            app(XApiClientFactory::class),
+            app(MetricsRecorder::class),
+        );
     }
 
     /** Run a closure with a given team in context. */

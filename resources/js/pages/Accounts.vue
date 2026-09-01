@@ -31,7 +31,6 @@ const allSelected = computed(() =>
 const badgeClass = {
     active: 'bg-green-50 text-green-700',
     needs_reauth: 'bg-amber-50 text-amber-700',
-    rate_limited: 'bg-blue-50 text-blue-700',
     suspended: 'bg-red-50 text-red-700',
     disabled: 'bg-neutral-100 text-neutral-500',
     error: 'bg-red-50 text-red-700',
@@ -510,7 +509,6 @@ async function connectAccount(flow) {
                 <option value="">Tất cả trạng thái</option>
                 <option value="active">Hoạt động</option>
                 <option value="needs_reauth">Cần xác thực lại</option>
-                <option value="rate_limited">Bị giới hạn</option>
                 <option value="disabled">Đã tắt</option>
                 <option value="error">Lỗi</option>
             </select>

@@ -125,7 +125,7 @@ class XAccount extends Model
             ->whereNotNull('refresh_token')
             ->whereNotNull('token_expires_at')
             ->where('token_expires_at', '<=', now()->addSeconds($withinSeconds))
-            ->whereIn('status', [AccountStatus::Active->value, AccountStatus::RateLimited->value]);
+            ->where('status', AccountStatus::Active->value);
     }
 
     /**

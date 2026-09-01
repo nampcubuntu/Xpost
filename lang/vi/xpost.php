@@ -7,7 +7,6 @@ return [
     'account_status' => [
         'active' => 'Hoạt động',
         'needs_reauth' => 'Cần xác thực lại',
-        'rate_limited' => 'Bị giới hạn tần suất',
         'suspended' => 'Bị X khoá',
         'disabled' => 'Đã tắt',
         'error' => 'Lỗi',

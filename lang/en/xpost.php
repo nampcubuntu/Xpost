@@ -7,7 +7,6 @@ return [
     'account_status' => [
         'active' => 'Active',
         'needs_reauth' => 'Needs re-authorisation',
-        'rate_limited' => 'Rate limited',
         'suspended' => 'Suspended by X',
         'disabled' => 'Disabled',
         'error' => 'Error',

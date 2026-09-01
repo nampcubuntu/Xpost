@@ -1,8 +1,12 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import api, { validationErrors } from '../lib/api';
+import { listen, socketState } from '../lib/echo';
+import { useAuthStore } from '../stores/auth';
 import NavIcon from '../components/NavIcon.vue';
 import TimezoneSelect from '../components/TimezoneSelect.vue';
+
+const auth = useAuthStore();
 
 const accounts = ref([]);
 const meta = ref(null);
@@ -83,6 +87,40 @@ onMounted(async () => {
     proxies.value = proxyResponse.data.data;
     proxyTotal.value = proxyResponse.data.meta?.total ?? proxies.value.length;
 });
+
+/*
+ * Live, from the same channel the posts list watches.
+ *
+ * The message names no account: a fan-out moves one post's counters but ten
+ * thousand accounts' health, so the event is a nudge throttled per team and
+ * this re-reads the page it is showing. One request per window however large
+ * the run.
+ *
+ * Not while a row is selected. A selection is a list of ids the bulk bar is
+ * about to act on, and load() prunes it to what came back -- so refetching
+ * under someone's hands would quietly shrink what they are about to press a
+ * button on. The numbers can wait until they let go.
+ */
+let stopListening = () => {};
+
+onMounted(() => {
+    const teamId = auth.user?.current_team_id;
+
+    if (! teamId) {
+        return;
+    }
+
+    stopListening = listen(`team.${teamId}`, '.account.health', () => {
+        if (document.hidden || selected.value.size || busy.value) {
+            return;
+        }
+
+        load();
+    });
+});
+
+// Or the page keeps re-reading a list nobody is looking at any more.
+onUnmounted(() => stopListening());
 
 let timer;
 watch([search, status, groupFilter], () => {
@@ -539,6 +577,21 @@ async function connectAccount(flow) {
                 <NavIcon name="apps" :size="13" class="text-neutral-400" />
                 Quản lý nhóm
             </button>
+
+            <!--
+                Says which mechanism is keeping the columns true, the way
+                the posts list does. Only while the socket is actually
+                connected -- a claim that quietly stops being true is worse
+                than none.
+            -->
+            <span
+                v-if="socketState === 'connected'"
+                class="ml-auto inline-flex items-center gap-1.5 text-[12px] text-green-700"
+                :title="`Reverb (${socketState}) — sức khoẻ và trạng thái tự cập nhật khi có bài đăng đi qua.`"
+            >
+                <span class="h-1.5 w-1.5 rounded-full bg-green-600"></span>
+                Reverb
+            </span>
         </div>
 
         <!--

@@ -6,6 +6,7 @@ namespace App\Services\Publishing;
 
 use App\Enums\AccountStatus;
 use App\Enums\TargetStatus;
+use App\Events\AccountHealthChanged;
 use App\Exceptions\XApiException;
 use App\Exceptions\XRateLimitException;
 use App\Models\PostMedia;
@@ -447,6 +448,8 @@ final class PostPublisher
             'last_used_at' => now(),
             'monthly_posts_used' => $app->monthly_posts_used + 1,
         ])->save();
+
+        AccountHealthChanged::announce((int) $account->team_id);
     }
 
     /** Repeated failures pull the account out of rotation before X does it for us. */
@@ -461,6 +464,8 @@ final class PostPublisher
             'cooldown_until' => $failures >= 3 ? now()->addMinutes(30 * $failures) : null,
             'status' => $failures >= 10 ? AccountStatus::Error : $account->status,
         ])->save();
+
+        AccountHealthChanged::announce((int) $account->team_id);
     }
 
     private function markAccountNeedsReauth(XAccount $account, string $reason): void

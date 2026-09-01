@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\MemberController;
 use App\Http\Controllers\Api\PostController;
 use App\Http\Controllers\Api\PostScheduleController;
 use App\Http\Controllers\Api\ProxyController;
+use App\Http\Controllers\Api\ProxyGroupController;
 use App\Http\Controllers\Api\TimezoneController;
 use App\Http\Controllers\Api\XAppController;
 use Illuminate\Support\Facades\Route;
@@ -134,6 +135,9 @@ Route::prefix('v1')->group(function (): void {
             Route::post('proxies/assign', [ProxyController::class, 'assignAccounts']);
             Route::delete('proxies', [ProxyController::class, 'destroyMany']);
             Route::post('proxies/{proxy}/check', [ProxyController::class, 'check']);
+
+            Route::apiResource('proxy-groups', ProxyGroupController::class)->except(['show']);
+            Route::post('proxy-groups/{proxy_group}/sync', [ProxyGroupController::class, 'sync']);
 
             // ----- Media -----
             Route::apiResource('media', MediaController::class)

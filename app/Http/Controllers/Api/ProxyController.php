@@ -35,6 +35,9 @@ class ProxyController extends Controller
         $this->authorize('viewAny', XAccount::class);
 
         $proxies = Proxy::query()
+            // Eager, because the rows carry their group chips: without it a
+            // page of fifty is fifty-one queries.
+            ->with('groups:id,name,color')
             ->when($request->query('search'), fn ($q, $term) => $q->where(
                 fn ($w) => $w->where('label', 'like', "%{$term}%")
                     ->orWhere('host', 'like', "%{$term}%")
@@ -42,6 +45,15 @@ class ProxyController extends Controller
                     ->orWhere('country', 'like', "%{$term}%")
             ))
             ->when($request->query('health'), fn ($q, $health) => $q->where('health_status', $health))
+            /*
+             * A group filter belongs here for the same reason search does: a
+             * group is how someone finds one supplier's batch among thousands,
+             * and filtering the fifty rows already downloaded would find only
+             * the members that happened to land on this page.
+             */
+            ->when($request->query('group'), fn ($q, $group) => $q->whereHas(
+                'groups', fn ($w) => $w->whereKey($group)
+            ))
             // Assignable first when asked: the account pages want somewhere to
             // put accounts, not an audit of everything ever imported.
             ->when($request->boolean('assignable'), fn ($q) => $q->assignable())
@@ -55,7 +67,9 @@ class ProxyController extends Controller
                 'id', 'label', 'scheme', 'host', 'port', 'country', 'is_active',
                 'health_status', 'latency_ms', 'assigned_count', 'max_accounts',
                 'last_checked_at', 'exit_ip', 'region', 'city', 'check_queued_at',
-            ]))->items(),
+            ]) + [
+                'groups' => $proxy->groups->map->only(['id', 'name', 'color'])->all(),
+            ])->items(),
             'meta' => [
                 'current_page' => $proxies->currentPage(),
                 'last_page' => $proxies->lastPage(),

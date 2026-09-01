@@ -10,6 +10,7 @@ use Database\Factories\ProxyFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Proxy extends Model
@@ -45,6 +46,11 @@ class Proxy extends Model
     public function accounts(): HasMany
     {
         return $this->hasMany(XAccount::class);
+    }
+
+    public function groups(): BelongsToMany
+    {
+        return $this->belongsToMany(ProxyGroup::class, 'proxy_group_proxy');
     }
 
     /** Guzzle-compatible proxy URI, credentials inlined. */

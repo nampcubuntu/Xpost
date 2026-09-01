@@ -8,6 +8,17 @@ const meta = ref(null);
 const page = ref(1);
 const search = ref('');
 const health = ref('');
+const group = ref('');
+
+/*
+ * Names for batches of proxies, loaded once beside the list.
+ *
+ * A supplier's delivery is hundreds of lines whose only distinguishing feature
+ * is the host, which is exactly what nobody remembers afterwards.
+ */
+const groups = ref([]);
+const managing = ref(false);
+const newGroup = reactive({ name: '', color: '#1d9bf0' });
 const showBulk = ref(false);
 const bulkText = ref('');
 const bulkScheme = ref('http');
@@ -59,7 +70,7 @@ async function load() {
      * table. Searching a pool you have not finished downloading is not
      * searching it either, so the filter goes with the request.
      */
-    const key = `proxies:${search.value}:${health.value}:${page.value}`;
+    const key = `proxies:${search.value}:${health.value}:${group.value}:${page.value}`;
 
     // Last answer first, then the true one: arriving at a page that has not
     // changed should not mean staring at an empty table while it is proved.
@@ -70,6 +81,7 @@ async function load() {
             params: {
                 search: search.value || undefined,
                 health: health.value || undefined,
+                group: group.value || undefined,
                 page: page.value,
             },
         })).data, (data) => {
@@ -87,14 +99,17 @@ async function load() {
 }
 
 let searchTimer;
-watch([search, health], () => {
+watch([search, health, group], () => {
     page.value = 1;
     clearTimeout(searchTimer);
     searchTimer = setTimeout(load, 300);
 });
 watch(page, load);
 
-onMounted(load);
+onMounted(() => {
+    load();
+    loadGroups();
+});
 
 function startCreate() {
     Object.assign(form, blank());
@@ -338,6 +353,108 @@ function confirmDelete(count, accounts) {
     );
 }
 
+async function loadGroups() {
+    const { data } = await api.get('proxy-groups');
+
+    groups.value = data.data;
+}
+
+/*
+ * The selection, put in a group.
+ *
+ * One request for the whole selection rather than one per proxy: this is how a
+ * supplier's delivery of two thousand gets named, and two thousand requests is
+ * not a way to name anything.
+ *
+ * Already-members are sent along with the rest -- "chọn tất cả" on a page where
+ * half are in the group is the normal way this is used, and the server attaches
+ * without detaching so the repeat is a no-op rather than an error.
+ */
+async function assignGroup(id) {
+    if (! id) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        await api.post(`proxy-groups/${id}/sync`, { attach: [...selected.value] });
+        selected.value = new Set();
+        await Promise.all([load(), loadGroups()]);
+    } finally {
+        busy.value = false;
+    }
+}
+
+/** Only offered while a group is being viewed, because that is the only time
+ *  "bỏ khỏi nhóm" names a group without asking which one. */
+async function removeFromGroup() {
+    busy.value = true;
+
+    try {
+        await api.post(`proxy-groups/${group.value}/sync`, { detach: [...selected.value] });
+        selected.value = new Set();
+        await Promise.all([load(), loadGroups()]);
+    } finally {
+        busy.value = false;
+    }
+}
+
+async function createGroup() {
+    if (! newGroup.name.trim()) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        await api.post('proxy-groups', { name: newGroup.name.trim(), color: newGroup.color });
+        newGroup.name = '';
+        await loadGroups();
+    } catch (error) {
+        // The one that actually happens: a second person naming a delivery
+        // that already has a name.
+        window.alert(validationErrors(error).name ?? 'Không tạo được nhóm.');
+    } finally {
+        busy.value = false;
+    }
+}
+
+async function renameGroup(row) {
+    const name = window.prompt('Tên nhóm', row.name)?.trim();
+
+    if (! name || name === row.name) {
+        return;
+    }
+
+    try {
+        await api.put(`proxy-groups/${row.id}`, { name });
+        await loadGroups();
+    } catch (error) {
+        window.alert(validationErrors(error).name ?? 'Không đổi tên được.');
+    }
+}
+
+/*
+ * The name goes; the proxies stay.
+ *
+ * Said out loud because "Xoá" on a row showing "412 proxy" reads like it takes
+ * them with it, and the one thing worse than losing a grouping is thinking you
+ * have lost a supplier's whole delivery.
+ */
+async function deleteGroup(row) {
+    if (! window.confirm(`Xoá nhóm "${row.name}"?\n\n${row.proxies_count} proxy trong nhóm vẫn được giữ nguyên, chỉ mất nhãn nhóm.`)) {
+        return;
+    }
+
+    await api.delete(`proxy-groups/${row.id}`);
+
+    if (group.value === String(row.id)) {
+        group.value = '';
+    }
+
+    await Promise.all([load(), loadGroups()]);
+}
 async function removeSelected() {
     if (! confirmDelete(selected.value.size, selectedAccounts.value)) {
         return;
@@ -547,6 +664,22 @@ async function remove(proxy) {
                 <option value="unknown">unknown</option>
             </select>
 
+            <!--
+                Filtered on the server like the rest: a group of two hundred
+                spread over four pages would otherwise come back looking like
+                whichever fifty had already been downloaded.
+            -->
+            <select v-model="group" class="xp-field max-w-[200px] py-1.5 text-[13px]">
+                <option value="">Mọi nhóm</option>
+                <option v-for="row in groups" :key="row.id" :value="String(row.id)">
+                    {{ row.name }} ({{ row.proxies_count }})
+                </option>
+            </select>
+
+            <button class="text-[12.5px] text-neutral-500 underline-offset-2 hover:underline" @click="managing = true">
+                Quản lý nhóm
+            </button>
+
             <span v-if="meta" class="ml-auto text-[12.5px] text-neutral-500">
                 {{ meta.total.toLocaleString('vi-VN') }} proxy
             </span>
@@ -567,12 +700,93 @@ async function remove(proxy) {
             <button class="rounded px-2 py-1 transition hover:bg-white/15" :disabled="busy" @click="checkSelected">
                 Kiểm tra
             </button>
+
+            <!--
+                A select rather than a dialog: picking a name off a short list is
+                the whole interaction, and it resets itself so the same group can
+                be chosen again for the next selection.
+            -->
+            <select
+                class="rounded bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/15 disabled:opacity-50"
+                :disabled="busy || !groups.length"
+                :value="''"
+                @change="assignGroup($event.target.value); $event.target.value = ''"
+            >
+                <option value="" class="text-neutral-900">Gán nhóm…</option>
+                <option v-for="row in groups" :key="row.id" :value="row.id" class="text-neutral-900">
+                    {{ row.name }}
+                </option>
+            </select>
+
+            <!-- Only while a group is being viewed, because only then does
+                 "bỏ khỏi nhóm" name a group without asking which. -->
+            <button
+                v-if="group"
+                class="rounded px-2 py-1 transition hover:bg-white/15"
+                :disabled="busy"
+                @click="removeFromGroup"
+            >
+                Bỏ khỏi nhóm
+            </button>
             <button class="rounded px-2 py-1 text-red-300 transition hover:bg-white/15" :disabled="busy" @click="removeSelected">
                 Xoá
             </button>
             <button class="ml-auto text-white/60 transition hover:text-white" @click="selected = new Set()">Bỏ chọn</button>
         </div>
 
+        <!--
+            Creating and renaming the names themselves.
+
+            A dialog rather than a page of its own: a group is a name and a
+            colour, and a whole route for two fields would be a heavier thing
+            than the thing it manages.
+        -->
+        <div v-if="managing" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="managing = false">
+            <div class="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-xl">
+                <div class="border-b border-neutral-200 px-5 py-4">
+                    <h2 class="text-[15px] font-semibold">Nhóm proxy</h2>
+                    <p class="mt-0.5 text-[12.5px] text-neutral-500">
+                        Đặt tên cho từng lô proxy — theo nhà cung cấp, quốc gia hay mục đích.
+                        Một proxy có thể thuộc nhiều nhóm.
+                    </p>
+                </div>
+
+                <form class="flex items-center gap-2 border-b border-neutral-200 px-5 py-3" @submit.prevent="createGroup">
+                    <input
+                        v-model="newGroup.name"
+                        class="xp-field flex-1 py-1.5 text-[13px]"
+                        placeholder="Tên nhóm mới…"
+                        maxlength="255"
+                    >
+                    <input v-model="newGroup.color" type="color" class="h-8 w-10 cursor-pointer rounded border border-neutral-200">
+                    <button type="submit" class="xp-btn-primary py-1.5 text-[13px]" :disabled="busy || !newGroup.name.trim()">
+                        Tạo
+                    </button>
+                </form>
+
+                <div class="min-h-0 flex-1 overflow-y-auto">
+                    <p v-if="!groups.length" class="px-5 py-8 text-center text-[13px] text-neutral-500">
+                        Chưa có nhóm nào.
+                    </p>
+
+                    <div
+                        v-for="row in groups"
+                        :key="row.id"
+                        class="flex items-center gap-3 border-b border-neutral-100 px-5 py-2.5 text-[13px] last:border-b-0"
+                    >
+                        <span class="h-3 w-3 shrink-0 rounded-full" :style="{ backgroundColor: row.color }"></span>
+                        <span class="min-w-0 flex-1 truncate font-medium">{{ row.name }}</span>
+                        <span class="shrink-0 text-[12.5px] text-neutral-500">{{ row.proxies_count }} proxy</span>
+                        <button class="shrink-0 text-neutral-500 hover:underline" @click="renameGroup(row)">Đổi tên</button>
+                        <button class="shrink-0 text-red-600 hover:underline" @click="deleteGroup(row)">Xoá</button>
+                    </div>
+                </div>
+
+                <div class="border-t border-neutral-200 px-5 py-3 text-right">
+                    <button class="xp-btn-ghost" @click="managing = false">Đóng</button>
+                </div>
+            </div>
+        </div>
         <!--
             Choosing who goes behind the selected proxies.
 
@@ -704,6 +918,23 @@ async function remove(proxy) {
                         <td class="px-4 py-3">
                             <p class="font-medium">{{ proxy.label || `${proxy.host}:${proxy.port}` }}</p>
                             <p class="text-xs text-neutral-500">{{ proxy.scheme }}://{{ proxy.host }}:{{ proxy.port }}</p>
+
+                            <!--
+                                Under the identity rather than in a column of
+                                their own: the table is already at its minimum
+                                width, and which batch a line came from is part
+                                of what the line is.
+                            -->
+                            <p v-if="proxy.groups?.length" class="mt-1 flex flex-wrap gap-1">
+                                <button
+                                    v-for="row in proxy.groups"
+                                    :key="row.id"
+                                    type="button"
+                                    class="rounded-full px-1.5 py-0.5 text-[11px] leading-tight transition hover:brightness-95"
+                                    :style="{ backgroundColor: `${row.color}1f`, color: row.color }"
+                                    @click="group = String(row.id)"
+                                >{{ row.name }}</button>
+                            </p>
                         </td>
 
                         <!--

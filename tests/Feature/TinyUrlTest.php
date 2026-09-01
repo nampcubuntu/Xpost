@@ -37,7 +37,10 @@ class TinyUrlTest extends TestCase
             'xpost.links.account_id' => 'acc',
             'xpost.links.api_token' => 'tok',
             'xpost.links.tinyurl.enabled' => true,
-            'xpost.links.tinyurl.token' => null,
+            // Required now: without one the only endpoint left is the
+            // anonymous one, and TinyURL sends those through a ten second
+            // interstitial rather than to the destination.
+            'xpost.links.tinyurl.token' => 'test-token',
         ]);
 
         $this->actingAs($this->user)->postJson('/api/v1/link-domains', ['host' => 'twvideo.top']);
@@ -51,7 +54,7 @@ class TinyUrlTest extends TestCase
     {
         Http::fake($overrides + [
             'api.cloudflare.com/*' => Http::response(['success' => true]),
-            'tinyurl.com/*' => Http::response('https://tinyurl.com/abcd'),
+            'api.tinyurl.com/*' => Http::response(['data' => ['tiny_url' => 'https://tinyurl.com/abcd']]),
         ]);
     }
 
@@ -91,7 +94,7 @@ class TinyUrlTest extends TestCase
     {
         // Shortening runs after the KV write; a failure there must not undo
         // something that was saved correctly.
-        $this->fake(['tinyurl.com/*' => Http::response('Error', 500)]);
+        $this->fake(['api.tinyurl.com/*' => Http::response(['errors' => ['down']], 500)]);
 
         $this->actingAs($this->user)
             ->postJson('/api/v1/links', ['key' => 'abc', 'value' => 'https://a|https://b'])
@@ -101,17 +104,45 @@ class TinyUrlTest extends TestCase
     }
 
     #[Test]
-    public function the_legacy_endpoint_answering_error_with_a_200_is_not_a_link(): void
+    public function without_a_token_nothing_is_minted_at_all(): void
     {
-        // It reports failure in the body, not the status.
-        $this->fake(['tinyurl.com/*' => Http::response('Error')]);
+        /*
+         * The anonymous endpoint is gone, and this is why. A link minted there
+         * answers 302 to tinyurl.com/preview/deprecated/… -- an interstitial
+         * that holds the visitor for ten seconds behind a "Continue to Your
+         * Destination" button. Three of those were shipped before it was
+         * noticed, because the fallback was silent.
+         *
+         * A link that does that is worse than no link, so there is no link.
+         */
+        config(['xpost.links.tinyurl.token' => null]);
+
+        $this->fake();
 
         $this->actingAs($this->user)
             ->postJson('/api/v1/links', ['key' => 'abc', 'value' => 'https://a|https://b'])
             ->assertCreated()
+            ->assertJsonPath('data.key', 'r:abc')
             ->assertJsonPath('data.tiny_url', null);
 
         $this->assertSame(0, TinyLink::query()->count());
+
+        // And nothing was asked of TinyURL, rather than asked and discarded.
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'tinyurl.com'));
+    }
+
+    #[Test]
+    public function the_shorten_endpoint_says_so_rather_than_answering_empty(): void
+    {
+        // A page of empty cells looks like TinyURL being down. It is a missing
+        // setting, and only the message can tell them apart.
+        config(['xpost.links.tinyurl.token' => null]);
+
+        $this->fake();
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links/shorten', ['keys' => ['r:abc']])
+            ->assertStatus(422);
     }
 
     #[Test]

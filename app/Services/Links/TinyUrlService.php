@@ -25,24 +25,31 @@ final class TinyUrlService
 {
     private const MODERN = 'https://api.tinyurl.com/create';
 
-    private const LEGACY = 'https://tinyurl.com/api-create.php';
+    /**
+     * How many to have in flight at once.
+     *
+     * Measured against the modern endpoint: ten concurrent is 72ms a link
+     * where five was 188ms -- 2.6x, with every one of them landing.
+     */
+    private const BATCH = 10;
 
     /**
-     * How many to have in flight at once, which depends on who is asking.
+     * Enabled means able to produce a link worth having.
      *
-     * The anonymous endpoint needs no account and publishes no rate limit,
-     * which is a reason to be gentle with it rather than a licence not to be.
-     * A token buys a stated allowance, and measured against it ten concurrent
-     * is 72ms a link where five was 188ms -- 2.6x, with every one of them
-     * landing.
+     * The token is part of that now. Without one the only endpoint available is
+     * the anonymous one, and TinyURL has deprecated it: a link minted there
+     * answers 302 to tinyurl.com/preview/deprecated/… -- an interstitial that
+     * holds the visitor for ten seconds behind a "Continue to Your Destination"
+     * button. A link that does that is worse than no link, and this was
+     * producing them silently.
+     *
+     * With a token the modern endpoint answers 301 straight to the
+     * destination, which is the whole point of shortening anything.
      */
-    private const BATCH_ANONYMOUS = 5;
-
-    private const BATCH_WITH_TOKEN = 10;
-
     public function isEnabled(): bool
     {
-        return (bool) config('xpost.links.tinyurl.enabled', false);
+        return (bool) config('xpost.links.tinyurl.enabled', false)
+            && filled(config('xpost.links.tinyurl.token'));
     }
 
     /** Whatever is already known for these targets, so nothing is re-minted. */
@@ -135,9 +142,13 @@ final class TinyUrlService
         $timeout = (int) config('xpost.http.timeout', 30);
         $minted = [];
 
-        $batch = $token === '' ? self::BATCH_ANONYMOUS : self::BATCH_WITH_TOKEN;
+        // Same rule as isEnabled(): without a token the only endpoint left
+        // mints links that detour through an interstitial.
+        if ($token === '') {
+            return array_replace(array_fill_keys($targetUrls, null), $known);
+        }
 
-        foreach (array_chunk($missing, $batch) as $chunk) {
+        foreach (array_chunk($missing, self::BATCH) as $chunk) {
             try {
                 $responses = Http::pool(fn ($pool) => array_map(
                     fn (string $url) => $this->queue($pool, $url, $token, $timeout),
@@ -150,7 +161,7 @@ final class TinyUrlService
             }
 
             foreach ($chunk as $i => $url) {
-                $tiny = $this->read($responses[$i] ?? null, $token !== '');
+                $tiny = $this->read($responses[$i] ?? null);
 
                 if ($tiny !== null) {
                     $minted[$url] = $tiny;
@@ -180,13 +191,9 @@ final class TinyUrlService
         );
     }
 
-    /** One request into the pool, in whichever dialect is configured. */
+    /** One request into the pool. */
     private function queue($pool, string $url, string $token, int $timeout)
     {
-        if ($token === '') {
-            return $pool->timeout($timeout)->get(self::LEGACY, ['url' => $url]);
-        }
-
         return $pool->withToken($token)->acceptJson()->timeout($timeout)->post(self::MODERN, [
             'url' => $url,
             'domain' => config('xpost.links.tinyurl.domain') ?: 'tinyurl.com',
@@ -199,24 +206,13 @@ final class TinyUrlService
      * A pooled entry is a Throwable when the request itself failed, which is
      * not a response and must not be called as one.
      */
-    private function read($response, bool $modern): ?string
+    private function read($response): ?string
     {
         if (! $response instanceof Response) {
             return null;
         }
 
-        if ($modern) {
-            return $response->failed() ? null : $response->json('data.tiny_url');
-        }
-
-        /*
-         * The legacy endpoint answers the URL as plain text, or the word
-         * "Error" with a 200 -- so the body has to be inspected, not just the
-         * status.
-         */
-        $body = trim($response->body());
-
-        return $response->successful() && str_starts_with($body, 'http') ? $body : null;
+        return $response->failed() ? null : $response->json('data.tiny_url');
     }
 
     private function mint(string $targetUrl, ?string $alias): ?string
@@ -224,16 +220,10 @@ final class TinyUrlService
         $token = (string) config('xpost.links.tinyurl.token');
         $timeout = (int) config('xpost.http.timeout', 30);
 
+        // No token, no link. See isEnabled(): the anonymous endpoint mints
+        // links that detour through a ten second interstitial.
         if ($token === '') {
-            /*
-             * The legacy endpoint answers the URL as plain text, or the word
-             * "Error" with a 200 -- so the body has to be inspected, not just
-             * the status.
-             */
-            $response = Http::timeout($timeout)->get(self::LEGACY, ['url' => $targetUrl]);
-            $body = trim($response->body());
-
-            return $response->successful() && str_starts_with($body, 'http') ? $body : null;
+            return null;
         }
 
         $response = Http::withToken($token)

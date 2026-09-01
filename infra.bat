@@ -24,10 +24,18 @@ wsl -d %DISTRO% -- bash -c "cd /mnt/d/Xpost && docker compose up -d mysql redis 
 echo.
 echo Starting Horizon (WSL PHP 8.5 -- Windows PHP has no pcntl)...
 wsl -d %DISTRO% -- bash /mnt/d/Xpost/bin/horizon-start.sh
+
+REM Reverb lives here for the same reason Horizon does, and it is no longer
+REM optional: the posts list dropped its five second poll, so a stopped
+REM Reverb means the status column simply stops moving.
+echo Starting Reverb (websocket, port 8080)...
+wsl -d %DISTRO% -- bash /mnt/d/Xpost/bin/reverb-start.sh
 powershell -NoProfile -Command "Start-Sleep -Seconds 5"
 goto status
 
 :down
+echo Stopping Reverb...
+wsl -d %DISTRO% -- bash -c "pkill -f 'artisan reverb' 2>/dev/null; true"
 echo Stopping Horizon...
 wsl -d %DISTRO% -- bash /mnt/d/Xpost/bin/horizon-stop.sh
 echo Stopping containers...

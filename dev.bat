@@ -38,6 +38,7 @@ start "Xpost vite" cmd /k npm run dev
 echo.
 echo   Web       http://localhost:8000
 echo   Horizon   http://localhost:8000/horizon
+echo   Reverb    ws://127.0.0.1:8080   (trang Bai dang doi no de cap nhat trang thai)
 echo   Mailpit   http://localhost:8025
 echo.
 echo   Vite is running, so .vue changes are live. For OAuth work run
@@ -56,12 +57,17 @@ if not exist "%CFD%" (
     goto done
 )
 
-start "Xpost tunnel" cmd /k "%CFD%" tunnel run --url http://127.0.0.1:8000 xpost-dev
+REM --config, not --url. --url is a single destination, and it overrides
+REM every ingress rule -- which sent the websocket path to the app on 8000,
+REM where the SPA catch-all answered it with HTML instead of an upgrade.
+REM Reverb is on 8080; bin\cloudflared.yml routes /app/ there.
+start "Xpost tunnel" cmd /k "%CFD%" tunnel --config "%~dp0bin\cloudflared.yml" run xpost-dev
 
 echo.
 echo   Tunnel    https://dev.zenomedia.co   (fixed hostname, safe to register with X)
 echo   Web       http://localhost:8000
 echo   Horizon   http://localhost:8000/horizon
+echo   Reverb    wss://dev.zenomedia.co/app/  -^> 127.0.0.1:8080
 echo.
 echo   Vite is deliberately NOT started: it serves assets over
 echo   http://localhost:5173, which the browser blocks on an https page and

@@ -103,16 +103,49 @@ watch([search, state], () => {
 watch(page, load);
 
 /*
- * The verdicts arrive on the queue, so the page asks again while anything is
- * still outstanding -- and stops when nothing is.
+ * The verdicts arrive on the queue, so the page asks again until they do.
+ *
+ * This looked once, five seconds after the click, and then stopped. A check is
+ * two calls to Sorsa and takes three to five seconds on its own, so the one
+ * look routinely landed before the answer -- and the page then sat there,
+ * saying results would appear, with nothing left that would ever fetch them.
  */
+const awaiting = ref(new Set());
 let poller;
+
+/** Which of the accounts asked for still have no verdict from this round. */
+function stillWaiting() {
+    return accounts.value.some((a) => awaiting.value.has(a.id) && ! a.visibility_checked_at)
+        || [...awaiting.value].some((id) => ! accounts.value.find((a) => a.id === id));
+}
+
+async function pollUntilSettled(attempt = 0) {
+    clearTimeout(poller);
+
+    // Backing off rather than hammering: a sweep of a thousand takes minutes,
+    // and a page asking every two seconds for all of them is its own load.
+    const wait = Math.min(2000 * 2 ** attempt, 15000);
+
+    poller = setTimeout(async () => {
+        await Promise.all([load(), loadStats()]);
+
+        // Twenty rounds at the cap is about four minutes, which is longer than
+        // any single check takes. Past that something is wrong upstream and
+        // more polling will not find it.
+        if (stillWaiting() && attempt < 20 && ! document.hidden) {
+            pollUntilSettled(attempt + 1);
+        } else {
+            awaiting.value = new Set();
+        }
+    }, wait);
+}
 
 onMounted(() => {
     load();
     loadStats();
 });
 
+// Or the page keeps asking for a list nobody is looking at any more.
 onUnmounted(() => clearTimeout(poller));
 
 function toggle(id) {
@@ -142,15 +175,13 @@ async function check(ids) {
         flash.value = {
             type: 'ok',
             message: `Đã đưa ${data.queued} tài khoản vào hàng đợi. `
-                + 'Mỗi tài khoản tốn 2 lượt gọi API và Sorsa giới hạn 20 lượt/giây, '
-                + 'nên kết quả hiện dần — không cần chờ ở đây.',
+                + 'Mỗi tài khoản tốn 2 lượt gọi API và mất khoảng 3–5 giây. '
+                + 'Trang sẽ tự cập nhật khi có kết quả — không cần tải lại.',
         };
 
         selected.value = new Set();
-
-        // Verdicts land on the queue; look again while any are outstanding.
-        clearTimeout(poller);
-        poller = setTimeout(() => { load(); loadStats(); }, 5000);
+        awaiting.value = new Set([...awaiting.value, ...ids]);
+        pollUntilSettled();
     } catch (error) {
         flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không kiểm tra được.' };
     } finally {

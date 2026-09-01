@@ -277,9 +277,17 @@ return [
 
         'metrics' => [
             'connection' => 'redis',
-            // Proxy checks ride here too: both are background chores, and
-            // `auto` balancing keeps a big check batch from starving metrics.
-            'queue' => ['metrics', 'default', 'proxies'],
+            /*
+             * Proxy and visibility checks ride here too: all three are
+             * background chores, and `auto` balancing keeps a big check
+             * batch from starving metrics.
+             *
+             * `checks` was missing, so CheckAccountVisibility jobs queued
+             * and no worker was watching -- they sat pending forever while
+             * the page said results would arrive shortly. A queue a job is
+             * dispatched to and no supervisor reads is silence, not delay.
+             */
+            'queue' => ['metrics', 'default', 'proxies', 'checks'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
             'minProcesses' => 1,

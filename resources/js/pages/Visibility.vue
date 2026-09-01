@@ -310,7 +310,7 @@ const checkedAt = (iso) => (iso
 
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
-                <table class="w-full min-w-[860px] text-left text-[13px]">
+                <table class="w-full min-w-[1040px] text-left text-[13px]">
                     <thead class="border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
                         <tr>
                             <th class="w-10 py-2.5 pl-4 pr-1">
@@ -318,15 +318,23 @@ const checkedAt = (iso) => (iso
                             </th>
                             <th class="px-4 py-2.5 font-medium">Tài khoản</th>
                             <th class="px-4 py-2.5 font-medium">Kết luận</th>
+                            <!--
+                                All four on the row. The first two are things X
+                                did; the last two are the account's own settings
+                                and are what explain the first two -- a private
+                                account cannot appear in search at all.
+                            -->
                             <th class="px-4 py-2.5 font-medium">Tìm kiếm bài</th>
                             <th class="px-4 py-2.5 font-medium">Gợi ý handle</th>
+                            <th class="border-l border-neutral-200 px-4 py-2.5 font-medium">Nhạy cảm</th>
+                            <th class="px-4 py-2.5 font-medium">Riêng tư</th>
                             <th class="px-4 py-2.5 font-medium">Kiểm lúc</th>
                             <th class="px-4 py-2.5"></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
-                        <tr v-if="loading"><td colspan="7" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
-                        <tr v-else-if="!accounts.length"><td colspan="7" class="px-4 py-8 text-center text-neutral-500">Không có tài khoản nào.</td></tr>
+                        <tr v-if="loading"><td colspan="9" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                        <tr v-else-if="!accounts.length"><td colspan="9" class="px-4 py-8 text-center text-neutral-500">Không có tài khoản nào.</td></tr>
 
                         <template v-for="account in accounts" :key="account.id">
                         <tr class="hover:bg-neutral-50"
@@ -375,6 +383,23 @@ const checkedAt = (iso) => (iso
                                 <span v-else class="text-neutral-300">—</span>
                             </td>
 
+                            <!--
+                                A setting reads yes/no, not detected/clear: it is
+                                something the account chose, and calling it a
+                                restriction would send someone looking for
+                                something X never did.
+                            -->
+                            <td class="border-l border-neutral-200 px-4 py-2.5">
+                                <span v-if="account.visibility_detail?.sensitive === true" class="font-medium text-amber-700">CÓ</span>
+                                <span v-else-if="account.visibility_detail?.sensitive === false" class="text-neutral-500">không</span>
+                                <span v-else class="text-neutral-300">—</span>
+                            </td>
+                            <td class="px-4 py-2.5">
+                                <span v-if="account.visibility_detail?.protected === true" class="font-medium text-blue-700">CÓ</span>
+                                <span v-else-if="account.visibility_detail?.protected === false" class="text-neutral-500">công khai</span>
+                                <span v-else class="text-neutral-300">—</span>
+                            </td>
+
                             <!-- A verdict with no date is a claim about now made
                                  from whenever. -->
                             <td class="whitespace-nowrap px-4 py-2.5 text-[12.5px] text-neutral-600">
@@ -397,7 +422,7 @@ const checkedAt = (iso) => (iso
                             search at all.
                         -->
                         <tr v-if="openFor === account.id">
-                            <td colspan="7" class="bg-neutral-50 px-4 py-3">
+                            <td colspan="9" class="bg-neutral-50 px-4 py-3">
                                 <p v-if="!account.visibility_checked_at" class="text-[13px] text-neutral-500">
                                     Chưa kiểm tra tài khoản này lần nào.
                                 </p>

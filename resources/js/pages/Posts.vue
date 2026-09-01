@@ -92,9 +92,37 @@ function toggleIn(group, value) {
     load();
 }
 
-/** Ads Manager counts the ticked boxes, not the narrowed ones. */
-const filterCount = computed(() =>
-    picked.destinations.length + picked.media.length + picked.statuses.length);
+const groups = [
+    { key: 'destinations', title: 'Đích đến', rows: destinations },
+    { key: 'media', title: 'Loại media', rows: mediaKinds },
+    { key: 'statuses', title: 'Trạng thái', rows: outcomes },
+];
+
+/** A group with every box ticked excludes nothing, so it is not a filter. */
+const isNarrowing = (group) => picked[group.key].length < group.rows.length;
+
+/*
+ * How many filters are actually narrowing the list.
+ *
+ * This counted ticked boxes, which is what Ads Manager does -- but Ads Manager
+ * never opens with a full set, and here every box starts ticked because a panel
+ * that hides rows before it is opened is a list that lies. The result was a
+ * badge reading "12" over an unfiltered list, which looks exactly like the app
+ * having chosen twelve filters on your behalf.
+ *
+ * So: nothing excluded, no badge.
+ */
+const filterCount = computed(() => groups.filter(isNarrowing).length);
+
+/** Back to showing everything, in one click rather than twelve. */
+function clearFilters() {
+    groups.forEach((group) => {
+        picked[group.key] = group.rows.map((row) => row.value);
+    });
+
+    page.value = 1;
+    load();
+}
 
 /* ── Account ─────────────────────────────────────────────────────────────── */
 
@@ -899,13 +927,12 @@ const destinationHost = (url) => {
                 </template>
 
                 <div class="max-h-[420px] overflow-y-auto">
-                    <template v-for="group in [
-                        { key: 'destinations', title: 'Đích đến', rows: destinations },
-                        { key: 'media', title: 'Loại media', rows: mediaKinds },
-                        { key: 'statuses', title: 'Trạng thái', rows: outcomes },
-                    ]" :key="group.key">
-                        <p class="px-3 pb-1 pt-2 text-[11px] uppercase tracking-wide text-neutral-400">
+                    <template v-for="group in groups" :key="group.key">
+                        <p class="flex items-center gap-2 px-3 pb-1 pt-2 text-[11px] uppercase tracking-wide text-neutral-400">
                             {{ group.title }}
+                            <!-- Which group is doing the narrowing, so a list
+                                 with rows missing says where they went. -->
+                            <span v-if="isNarrowing(group)" class="h-1.5 w-1.5 rounded-full bg-neutral-900"></span>
                         </p>
                         <label
                             v-for="row in group.rows"
@@ -921,6 +948,12 @@ const destinationHost = (url) => {
                             {{ row.label }}
                         </label>
                     </template>
+                </div>
+
+                <div v-if="filterCount" class="border-t border-neutral-100 px-3 py-2">
+                    <button class="text-[12.5px] text-blue-600 hover:underline" @click="clearFilters">
+                        Bỏ lọc, hiện tất cả
+                    </button>
                 </div>
             </FilterDropdown>
 

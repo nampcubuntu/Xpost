@@ -9,6 +9,9 @@ const stats = ref(null);
 const groups = ref([]);
 const apps = ref([]);
 const proxies = ref([]);
+// How many the pool actually holds, so a capped dropdown can say so rather
+// than looking like the whole answer.
+const proxyTotal = ref(0);
 const loading = ref(true);
 const busy = ref(false);
 const flash = ref(null);
@@ -61,12 +64,17 @@ onMounted(async () => {
         load(),
         api.get('account-groups'),
         api.get('apps'),
-        api.get('proxies'),
+        // assignable only, and capped: the pool can hold thousands, and a
+        // dropdown is not how anyone picks one out of two thousand. Spreading
+        // into the pool is the operation that matters at that size, and it
+        // needs no list at all.
+        api.get('proxies', { params: { assignable: 1, per_page: 200 } }),
     ]);
 
     groups.value = groupResponse.data.data;
     apps.value = appResponse.data.data;
     proxies.value = proxyResponse.data.data;
+    proxyTotal.value = proxyResponse.data.meta?.total ?? proxies.value.length;
 });
 
 let timer;
@@ -450,6 +458,9 @@ async function connectAccount(flow) {
                     <option value="">Gán proxy…</option>
                     <option value="spread">Chia đều vào pool</option>
                     <option value="clear">— Bỏ proxy —</option>
+                    <option v-if="proxyTotal > proxies.length" disabled>
+                        ── {{ proxies.length }} / {{ proxyTotal }} proxy — dùng "Chia đều" cho cả pool ──
+                    </option>
                     <!-- Named the same way the column names it, so the string you pick is the string you see. -->
                     <option v-for="proxy in assignableProxies" :key="proxy.id" :value="proxy.id">
                         {{ proxy.host }}:{{ proxy.port }}

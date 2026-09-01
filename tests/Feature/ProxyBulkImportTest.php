@@ -305,4 +305,50 @@ class ProxyBulkImportTest extends TestCase
         // An empty selection is a bug in the caller, not a no-op to absorb.
         $this->deleteJson('/api/v1/proxies', ['ids' => []])->assertStatus(422);
     }
+
+    #[Test]
+    public function the_list_is_a_page_and_not_the_pool(): void
+    {
+        /*
+         * The bulk import accepts two thousand lines in one paste, so the size
+         * this endpoint had to survive was set by a limit somewhere else. At
+         * 328 bytes a row that was 0.6MB down the tunnel and two thousand rows
+         * of table on arrival.
+         */
+        collect(range(1, 60))->each(fn (int $n) => $this->proxy(['host' => "10.0.0.{$n}"]));
+
+        $response = $this->getJson('/api/v1/proxies')->assertOk();
+
+        $this->assertCount(50, $response->json('data'));
+        $this->assertSame(60, $response->json('meta.total'));
+        $this->assertSame(2, $response->json('meta.last_page'));
+    }
+
+    #[Test]
+    public function searching_asks_the_server_not_the_page(): void
+    {
+        // Filtering in the browser searches what has been downloaded, which at
+        // fifty of two thousand is not the pool.
+        $this->proxy(['host' => '203.0.113.7', 'label' => 'Sai Gon 1']);
+        $this->proxy(['host' => '198.51.100.4', 'label' => 'Tokyo 1']);
+
+        $rows = $this->getJson('/api/v1/proxies?search=203.0.113')->assertOk()->json('data');
+
+        $this->assertCount(1, $rows);
+        $this->assertSame('203.0.113.7', $rows[0]['host']);
+    }
+
+    #[Test]
+    public function the_account_pages_ask_only_for_proxies_with_room(): void
+    {
+        // A dropdown offering somewhere accounts cannot go is a choice that
+        // fails at publish rather than at the click.
+        $this->proxy(['host' => '1.1.1.1', 'health_status' => 'healthy', 'assigned_count' => 0, 'max_accounts' => 50]);
+        $this->proxy(['host' => '2.2.2.2', 'health_status' => 'dead']);
+        $this->proxy(['host' => '3.3.3.3', 'health_status' => 'healthy', 'assigned_count' => 50, 'max_accounts' => 50]);
+
+        $rows = $this->getJson('/api/v1/proxies?assignable=1')->assertOk()->json('data');
+
+        $this->assertSame(['1.1.1.1'], array_column($rows, 'host'));
+    }
 }

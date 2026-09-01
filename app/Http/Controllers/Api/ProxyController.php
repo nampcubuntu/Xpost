@@ -19,16 +19,49 @@ use Illuminate\Validation\Rule;
 
 class ProxyController extends Controller
 {
-    public function index(): JsonResponse
+    /**
+     * A page of proxies, not the pool.
+     *
+     * This returned every row. At 328 bytes each a supplier's delivery of two
+     * thousand is 0.6MB down a tunnel and two thousand rows of table, and the
+     * bulk import accepts two thousand in one paste -- so the size the page had
+     * to survive was set by a limit somewhere else entirely.
+     *
+     * Filtered here rather than in the browser for the same reason: searching a
+     * pool you have not finished downloading is not searching it.
+     */
+    public function index(Request $request): JsonResponse
     {
         $this->authorize('viewAny', XAccount::class);
 
+        $proxies = Proxy::query()
+            ->when($request->query('search'), fn ($q, $term) => $q->where(
+                fn ($w) => $w->where('label', 'like', "%{$term}%")
+                    ->orWhere('host', 'like', "%{$term}%")
+                    ->orWhere('exit_ip', 'like', "%{$term}%")
+                    ->orWhere('country', 'like', "%{$term}%")
+            ))
+            ->when($request->query('health'), fn ($q, $health) => $q->where('health_status', $health))
+            // Assignable first when asked: the account pages want somewhere to
+            // put accounts, not an audit of everything ever imported.
+            ->when($request->boolean('assignable'), fn ($q) => $q->assignable())
+            ->orderBy('label')
+            ->orderBy('host')
+            ->paginate(min((int) $request->query('per_page', 50), 200))
+            ->withQueryString();
+
         return response()->json([
-            'data' => Proxy::query()
-                ->orderBy('label')
-                ->get(['id', 'label', 'scheme', 'host', 'port', 'country', 'is_active',
-                    'health_status', 'latency_ms', 'assigned_count', 'max_accounts', 'last_checked_at',
-                    'exit_ip', 'region', 'city', 'check_queued_at']),
+            'data' => $proxies->through(fn (Proxy $proxy) => $proxy->only([
+                'id', 'label', 'scheme', 'host', 'port', 'country', 'is_active',
+                'health_status', 'latency_ms', 'assigned_count', 'max_accounts',
+                'last_checked_at', 'exit_ip', 'region', 'city', 'check_queued_at',
+            ]))->items(),
+            'meta' => [
+                'current_page' => $proxies->currentPage(),
+                'last_page' => $proxies->lastPage(),
+                'per_page' => $proxies->perPage(),
+                'total' => $proxies->total(),
+            ],
         ]);
     }
 

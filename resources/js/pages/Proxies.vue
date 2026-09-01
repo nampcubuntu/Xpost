@@ -4,6 +4,10 @@ import api, { validationErrors } from '../lib/api';
 import { cached, swr } from '../lib/cache';
 
 const proxies = ref([]);
+const meta = ref(null);
+const page = ref(1);
+const search = ref('');
+const health = ref('');
 const showBulk = ref(false);
 const bulkText = ref('');
 const bulkScheme = ref('http');
@@ -47,16 +51,33 @@ const healthClass = {
 };
 
 async function load() {
+    /*
+     * A page at a time, filtered on the server.
+     *
+     * A supplier delivers two thousand proxies in one paste, and this used to
+     * fetch all of them -- 0.6MB down the tunnel and two thousand rows of
+     * table. Searching a pool you have not finished downloading is not
+     * searching it either, so the filter goes with the request.
+     */
+    const key = `proxies:${search.value}:${health.value}:${page.value}`;
+
     // Last answer first, then the true one: arriving at a page that has not
     // changed should not mean staring at an empty table while it is proved.
-    loading.value = cached('proxies') === undefined;
+    loading.value = cached(key) === undefined;
 
     try {
-        await swr('proxies', async () => (await api.get('proxies')).data, (data) => {
+        await swr(key, async () => (await api.get('proxies', {
+            params: {
+                search: search.value || undefined,
+                health: health.value || undefined,
+                page: page.value,
+            },
+        })).data, (data) => {
             proxies.value = data.data;
+            meta.value = data.meta;
 
-            // Drop anything that has since been deleted, or the count in the
-            // action bar promises rows the next action cannot find.
+            // Drop anything no longer on this page, or the count in the action
+            // bar promises rows the next action cannot find.
             const live = new Set(proxies.value.map((proxy) => proxy.id));
             selected.value = new Set([...selected.value].filter((id) => live.has(id)));
         });
@@ -64,6 +85,14 @@ async function load() {
         loading.value = false;
     }
 }
+
+let searchTimer;
+watch([search, health], () => {
+    page.value = 1;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(load, 300);
+});
+watch(page, load);
 
 onMounted(load);
 
@@ -467,6 +496,31 @@ async function remove(proxy) {
         </form>
 
         <!--
+            Filtered on the server, so this searches the pool rather than the
+            page -- which is the only version of the question worth asking once
+            a supplier has delivered two thousand of them.
+        -->
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+            <input
+                v-model="search"
+                class="xp-field max-w-[280px] py-1.5 text-[13px]"
+                placeholder="Tìm host, IP đi ra, nhãn, quốc gia…"
+            >
+
+            <select v-model="health" class="xp-field max-w-[170px] py-1.5 text-[13px]">
+                <option value="">Mọi tình trạng</option>
+                <option value="healthy">healthy</option>
+                <option value="degraded">degraded</option>
+                <option value="dead">dead</option>
+                <option value="unknown">unknown</option>
+            </select>
+
+            <span v-if="meta" class="ml-auto text-[12.5px] text-neutral-500">
+                {{ meta.total.toLocaleString('vi-VN') }} proxy
+            </span>
+        </div>
+
+        <!--
             Only present when there is a selection. A permanently visible bar
             with disabled buttons is a row of things you cannot do.
         -->
@@ -660,6 +714,13 @@ async function remove(proxy) {
                 </tbody>
             </table>
             </div>
+        </div>
+
+        <!-- Only when there is more than one page to be on. -->
+        <div v-if="meta && meta.last_page > 1" class="mt-4 flex items-center gap-3">
+            <button class="xp-btn-ghost" :disabled="page <= 1" @click="page--">Trước</button>
+            <span class="text-[13px] text-neutral-600">Trang {{ meta.current_page }} / {{ meta.last_page }}</span>
+            <button class="xp-btn-ghost" :disabled="page >= meta.last_page" @click="page++">Sau</button>
         </div>
     </div>
 </template>

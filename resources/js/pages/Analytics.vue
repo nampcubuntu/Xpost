@@ -129,8 +129,8 @@ const engagementSeries = computed(() => [
 ]);
 
 const volumeSeries = computed(() => [
-    { key: 'published', label: 'Đã đăng', color: '#0f172a', axis: 'left', values: volumeDays.value.map((d) => d.published) },
-    { key: 'failed', label: 'Thất bại', color: '#e0666b', axis: 'right', values: volumeDays.value.map((d) => d.failed) },
+    { key: 'published', label: 'Đã đăng', color: '#0f172a', values: volumeDays.value.map((d) => d.published) },
+    { key: 'failed', label: 'Thất bại', color: '#e0666b', values: volumeDays.value.map((d) => d.failed) },
 ]);
 
 const chartDays = computed(() => volumeDays.value.map((d) => d.day));
@@ -322,14 +322,15 @@ const measured = (value) => {
             </div>
 
             <!--
-                One chart, two scales.
+                One column a day, split by share.
 
-                The range holds 28 published against 914 failed. On a shared
-                axis the published bars sit flat on the floor -- the series
-                someone opened the page for, drawn as nothing. Splitting into
-                two charts fixed that and cost the x axis twice over and half
-                the width, so instead the failures get their own scale on the
-                right, written in their own colour.
+                Two bars on two scales could both be seen but could not be
+                compared -- a taller bar did not mean a bigger number, and
+                the ratio that actually matters was left for the reader to
+                work out from two axes. Stacking puts it in the column: five
+                hundred sent with ten failures is a tall black column with a
+                sliver of pink, and the day it went wrong is a column that is
+                nearly all pink. One scale, and the shape says it.
             -->
             <div class="xp-card mb-5 p-5">
                 <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
@@ -342,7 +343,6 @@ const measured = (value) => {
                             <span class="font-medium tabular-nums" :style="{ color: s.color }">
                                 {{ n(s.values.reduce((a, b) => a + b, 0)) }}
                             </span>
-                            <span class="text-neutral-400">({{ s.axis === 'right' ? 'trục phải' : 'trục trái' }})</span>
                         </span>
                     </div>
                 </div>
@@ -361,8 +361,8 @@ const measured = (value) => {
                     v-if="volumeDays.length"
                     :series="volumeSeries"
                     :labels="chartDays"
-                    kind="bars"
-                    :height="170"
+                    kind="stacked"
+                    :height="180"
                 />
                 <p v-else class="py-8 text-center text-[13px] text-neutral-500">Chưa có dữ liệu trong khoảng này.</p>
             </div>

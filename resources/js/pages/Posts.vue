@@ -374,6 +374,24 @@ const SOCKET_REFRESH_MS = 60000;
 
 let refreshTimer;
 
+/*
+ * When the socket last said something.
+ *
+ * Shown beside the pip because "có cập nhật" and "cập nhật bằng gì" are
+ * different questions, and the pip only ever answered the first. A time that
+ * moves the instant a worker finishes a target is the socket; nothing else on
+ * this page can produce one.
+ *
+ * A clock time rather than "x giây trước": the relative form needs a timer
+ * ticking once a second to stay true, and a label is not worth reintroducing
+ * the thing this page just removed.
+ */
+const lastPushAt = ref(null);
+
+const lastPushLabel = computed(() => (lastPushAt.value
+    ? lastPushAt.value.toLocaleTimeString('vi-VN', { hour12: false })
+    : null));
+
 /** Posts with work still to do. Nothing else can change on its own. */
 const inFlight = computed(() => posts.value.some((post) => ['scheduled', 'publishing'].includes(post.status)
     || (post.progress?.pending ?? 0) > 0));
@@ -459,6 +477,10 @@ function flushProgress() {
 }
 
 function receiveProgress(payload) {
+    // Stamped from the frame, not from a request. This is what tells an
+    // operator which mechanism is feeding the column -- the question the green
+    // pip on its own could not answer.
+    lastPushAt.value = new Date();
     queued.set(payload.id, payload);
 
     // requestAnimationFrame and not a timer: a hidden tab stops calling it, so
@@ -586,12 +608,17 @@ const destinationHost = (url) => {
                         a settled list would be a claim that quietly stops being
                         true, and nobody would know which state they were in.
                     -->
-                    <span v-if="inFlight && !liveBroken" class="inline-flex items-center gap-1.5 text-[12px] text-green-700">
+                    <span
+                        v-if="inFlight && !liveBroken"
+                        class="inline-flex items-center gap-1.5 text-[12px] text-green-700"
+                        :title="`Reverb (${socketState}) — trạng thái được đẩy tới ngay khi đổi. Trang không hỏi lại theo nhịp.`"
+                    >
                         <span class="relative flex h-1.5 w-1.5">
                             <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-75"></span>
                             <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-green-600"></span>
                         </span>
-                        Cập nhật tức thì
+                        Reverb
+                        <span v-if="lastPushLabel" class="text-green-700/70">· tin cuối {{ lastPushLabel }}</span>
                     </span>
                 </p>
             </div>

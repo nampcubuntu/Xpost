@@ -26,8 +26,11 @@ const props = defineProps({
 const W = 760;
 const PAD = { top: 12, right: 10, bottom: 24, left: 46 };
 
+// The right scale needs room the single-axis layout does not.
+const padRight = computed(() => (hasRight.value ? 46 : PAD.right));
+
 const H = computed(() => props.height);
-const plotW = computed(() => W - PAD.left - PAD.right);
+const plotW = computed(() => W - PAD.left - padRight.value);
 const plotH = computed(() => H.value - PAD.top - PAD.bottom);
 
 const count = computed(() => props.labels.length);
@@ -38,9 +41,7 @@ const count = computed(() => props.labels.length);
  * A scale that ends at 4,173 puts gridlines on numbers nobody can compare
  * against; rounding to 5,000 makes the halfway line mean half.
  */
-const max = computed(() => {
-    const peak = Math.max(0, ...props.series.flatMap((s) => s.values.map(Number)));
-
+function roundUp(peak) {
     if (peak <= 0) {
         return 1;
     }
@@ -49,33 +50,71 @@ const max = computed(() => {
     const step = [1, 2, 2.5, 5, 10].find((m) => peak <= magnitude * m) ?? 10;
 
     return magnitude * step;
-});
+}
 
-const ticks = computed(() => [0, 0.25, 0.5, 0.75, 1].map((f) => ({
-    value: max.value * f,
+const onAxis = (side) => props.series.filter((s) => (s.axis ?? 'left') === side);
+
+/*
+ * A scale per axis, because one cannot hold both.
+ *
+ * Twenty-eight published against nine hundred failed on a shared axis pins
+ * the published series flat against the floor -- the series someone opened
+ * the page for, drawn as a line of nothing. A second axis keeps both on one
+ * chart, and each axis is written in its own series' colour so nobody reads
+ * a bar against the wrong numbers.
+ */
+const max = computed(() => ({
+    left: roundUp(Math.max(0, ...onAxis('left').flatMap((s) => s.values.map(Number)))),
+    right: roundUp(Math.max(0, ...onAxis('right').flatMap((s) => s.values.map(Number)))),
+}));
+
+const hasRight = computed(() => onAxis('right').length > 0);
+
+const fractions = [0, 0.25, 0.5, 0.75, 1];
+
+const ticks = computed(() => fractions.map((f) => ({
+    left: max.value.left * f,
+    right: max.value.right * f,
     y: PAD.top + plotH.value * (1 - f),
 })));
+
+/** The colour each axis is labelled in, so a scale points at its series. */
+const axisColour = computed(() => ({
+    left: onAxis('left')[0]?.color ?? '#a3a3a3',
+    right: onAxis('right')[0]?.color ?? '#a3a3a3',
+}));
 
 /** One point per day, spread across the plot even when there is only one. */
 const x = (i) => (count.value <= 1
     ? PAD.left + plotW.value / 2
     : PAD.left + (plotW.value * i) / (count.value - 1));
 
-const y = (v) => PAD.top + plotH.value * (1 - Number(v ?? 0) / max.value);
+const y = (v, axis = 'left') => PAD.top + plotH.value * (1 - Number(v ?? 0) / max.value[axis]);
 
-const linePath = (values) => values
-    .map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`)
+const linePath = (values, axis) => values
+    .map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v, axis).toFixed(1)}`)
     .join(' ');
 
-const areaPath = (values) => (values.length === 0
+const areaPath = (values, axis) => (values.length === 0
     ? ''
-    : `${linePath(values)} L${x(values.length - 1).toFixed(1)},${PAD.top + plotH.value} `
+    : `${linePath(values, axis)} L${x(values.length - 1).toFixed(1)},${PAD.top + plotH.value} `
         + `L${x(0).toFixed(1)},${PAD.top + plotH.value} Z`);
 
 /** Bar geometry, for the volume chart that shares this grid. */
-const barWidth = computed(() => Math.max(2, Math.min(22, (plotW.value / Math.max(count.value, 1)) - 3)));
+const barWidth = computed(() => {
+    const slot = (plotW.value / Math.max(count.value, 1)) - 3;
 
-const barX = (i) => x(i) - barWidth.value / 2;
+    return Math.max(2, Math.min(20, slot) / Math.max(1, props.series.length));
+});
+
+/*
+ * Side by side, never overlaid.
+ *
+ * Two series read against two different scales, so a taller bar does not
+ * mean a bigger number -- drawing one in front of the other would invite
+ * exactly that comparison.
+ */
+const barX = (i, slot) => x(i) - (barWidth.value * props.series.length) / 2 + slot * barWidth.value;
 
 /*
  * Which dates get printed.
@@ -116,9 +155,9 @@ const tooltipSide = computed(() => (hover.value !== null && hover.value > count.
             <g>
                 <line
                     v-for="t in ticks"
-                    :key="`grid-${t.value}`"
+                    :key="`grid-${t.y}`"
                     :x1="PAD.left"
-                    :x2="W - PAD.right"
+                    :x2="W - padRight"
                     :y1="t.y"
                     :y2="t.y"
                     stroke="currentColor"
@@ -128,16 +167,16 @@ const tooltipSide = computed(() => (hover.value !== null && hover.value > count.
             </g>
 
             <template v-if="kind === 'bars'">
-                <g v-for="s in series" :key="s.key">
+                <g v-for="(s, slot) in series" :key="s.key">
                     <rect
                         v-for="(v, i) in s.values"
                         :key="`${s.key}-${i}`"
-                        :x="barX(i)"
-                        :y="y(v)"
+                        :x="barX(i, slot)"
+                        :y="y(v, s.axis ?? 'left')"
                         :width="barWidth"
-                        :height="Math.max(0, PAD.top + plotH - y(v))"
+                        :height="Math.max(0, PAD.top + plotH - y(v, s.axis ?? 'left'))"
                         :fill="s.color"
-                        rx="2"
+                        rx="1.5"
                     />
                 </g>
             </template>
@@ -150,12 +189,12 @@ const tooltipSide = computed(() => (hover.value !== null && hover.value > count.
                     </linearGradient>
                 </defs>
 
-                <path v-for="s in series" :key="`area-${s.key}`" :d="areaPath(s.values)" :fill="`url(#fade-${s.key})`" />
+                <path v-for="s in series" :key="`area-${s.key}`" :d="areaPath(s.values, s.axis ?? 'left')" :fill="`url(#fade-${s.key})`" />
 
                 <path
                     v-for="s in series"
                     :key="`line-${s.key}`"
-                    :d="linePath(s.values)"
+                    :d="linePath(s.values, s.axis ?? 'left')"
                     fill="none"
                     :stroke="s.color"
                     stroke-width="2"
@@ -182,7 +221,7 @@ const tooltipSide = computed(() => (hover.value !== null && hover.value > count.
                     v-for="s in series"
                     :key="`dot-${s.key}`"
                     :cx="x(hover)"
-                    :cy="y(s.values[hover])"
+                    :cy="y(s.values[hover], s.axis ?? 'left')"
                     r="3.5"
                     :fill="s.color"
                     stroke="#fff"
@@ -210,10 +249,21 @@ const tooltipSide = computed(() => (hover.value !== null && hover.value > count.
         <div class="pointer-events-none absolute inset-0">
             <span
                 v-for="t in ticks"
-                :key="`tick-${t.value}`"
-                class="absolute -translate-y-1/2 text-[10.5px] tabular-nums text-neutral-400"
-                :style="{ top: `${(t.y / H) * 100}%`, left: 0 }"
-            >{{ format(Math.round(t.value)) }}</span>
+                :key="`tick-l-${t.y}`"
+                class="absolute -translate-y-1/2 text-[10.5px] tabular-nums"
+                :style="{ top: `${(t.y / H) * 100}%`, left: 0, color: hasRight ? axisColour.left : undefined }"
+                :class="hasRight ? '' : 'text-neutral-400'"
+            >{{ format(Math.round(t.left)) }}</span>
+
+            <!-- The second scale, written in its own series' colour so a bar
+                 is never read against the wrong numbers. -->
+            <span
+                v-for="t in ticks"
+                v-show="hasRight"
+                :key="`tick-r-${t.y}`"
+                class="absolute -translate-y-1/2 text-[10.5px] tabular-nums"
+                :style="{ top: `${(t.y / H) * 100}%`, right: 0, color: axisColour.right }"
+            >{{ format(Math.round(t.right)) }}</span>
 
             <span
                 v-for="(day, i) in labels"

@@ -129,8 +129,8 @@ const engagementSeries = computed(() => [
 ]);
 
 const volumeSeries = computed(() => [
-    { key: 'published', label: 'Đã đăng', color: '#0f172a', values: volumeDays.value.map((d) => d.published) },
-    { key: 'failed', label: 'Thất bại', color: '#f4a4a4', values: volumeDays.value.map((d) => d.failed) },
+    { key: 'published', label: 'Đã đăng', color: '#0f172a', axis: 'left', values: volumeDays.value.map((d) => d.published) },
+    { key: 'failed', label: 'Thất bại', color: '#e0666b', axis: 'right', values: volumeDays.value.map((d) => d.failed) },
 ]);
 
 const chartDays = computed(() => volumeDays.value.map((d) => d.day));
@@ -322,18 +322,32 @@ const measured = (value) => {
             </div>
 
             <!--
-                Two scales, because one cannot hold both.
+                One chart, two scales.
 
-                On this install the range holds 28 published against 914 failed.
-                Sharing an axis pins the published series flat against the floor
-                -- the series someone opened the page to see, drawn as a line of
-                nothing. Separate charts cost a comparison that was meaningless
-                at 30:1 anyway, and buy back the shape of each.
+                The range holds 28 published against 914 failed. On a shared
+                axis the published bars sit flat on the floor -- the series
+                someone opened the page for, drawn as nothing. Splitting into
+                two charts fixed that and cost the x axis twice over and half
+                the width, so instead the failures get their own scale on the
+                right, written in their own colour.
             -->
             <div class="xp-card mb-5 p-5">
-                <h2 class="text-[15px] font-semibold">Lượng bài đăng theo ngày</h2>
+                <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+                    <h2 class="text-[15px] font-semibold">Lượng bài đăng theo ngày</h2>
 
-                <p class="mb-4 text-[11.5px] text-neutral-500">
+                    <div class="flex gap-4 text-[11.5px]">
+                        <span v-for="s in volumeSeries" :key="s.key" class="flex items-center gap-1.5">
+                            <span class="h-2 w-2 rounded-sm" :style="{ background: s.color }"></span>
+                            <span class="text-neutral-500">{{ s.label }}</span>
+                            <span class="font-medium tabular-nums" :style="{ color: s.color }">
+                                {{ n(s.values.reduce((a, b) => a + b, 0)) }}
+                            </span>
+                            <span class="text-neutral-400">({{ s.axis === 'right' ? 'trục phải' : 'trục trái' }})</span>
+                        </span>
+                    </div>
+                </div>
+
+                <p class="mb-3 text-[11.5px] text-neutral-500">
                     Đếm theo đích đến, không phải lượt gọi API.
                     <template v-if="retries > 0">
                         Có {{ n(retries) }} lượt thử lại không hiện ở đây.
@@ -343,29 +357,14 @@ const measured = (value) => {
                     </template>
                 </p>
 
-                <div class="grid gap-5 lg:grid-cols-2">
-                    <div v-for="s in volumeSeries" :key="s.key">
-                        <p class="mb-1 flex items-baseline gap-2">
-                            <span class="h-2 w-2 shrink-0 rounded-sm" :style="{ background: s.color }"></span>
-                            <span class="text-[12.5px] font-medium">{{ s.label }}</span>
-                            <span class="text-[12.5px] tabular-nums text-neutral-500">
-                                {{ n(s.values.reduce((a, b) => a + b, 0)) }}
-                            </span>
-                        </p>
-
-                        <TrendChart
-                            v-if="volumeDays.length"
-                            :series="[s]"
-                            :labels="chartDays"
-                            kind="bars"
-                            :height="130"
-                        />
-                    </div>
-                </div>
-
-                <p v-if="!volumeDays.length" class="py-8 text-center text-[13px] text-neutral-500">
-                    Chưa có dữ liệu trong khoảng này.
-                </p>
+                <TrendChart
+                    v-if="volumeDays.length"
+                    :series="volumeSeries"
+                    :labels="chartDays"
+                    kind="bars"
+                    :height="170"
+                />
+                <p v-else class="py-8 text-center text-[13px] text-neutral-500">Chưa có dữ liệu trong khoảng này.</p>
             </div>
 
             <!--

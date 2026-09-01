@@ -37,6 +37,16 @@ final class ShadowbanChecker
 
     public const UNKNOWN = 'unknown';
 
+    /**
+     * Why the last check could not answer, when it could not.
+     *
+     * Kept because "không hỏi được" on its own sends someone to look at X
+     * for a problem that is on this side of the wire -- the run that
+     * prompted this was fifty rows of it, and the cause was a flat 403
+     * saying the Sorsa plan was out of requests.
+     */
+    private ?string $error = null;
+
     public function isConfigured(): bool
     {
         return filled(config('xpost.links.sorsa.key'));
@@ -55,6 +65,7 @@ final class ShadowbanChecker
     public function check(string $handle): array
     {
         $handle = ltrim(trim($handle), '@');
+        $this->error = null;
 
         $profile = $this->searchUsers($handle);
         $posts = $this->searchTweets($handle);
@@ -107,6 +118,12 @@ final class ShadowbanChecker
             'protected' => $profile['protected'] ?? null,
             'sensitive' => $profile['sensitive'] ?? null,
         ];
+
+        // The reason travels with the verdict, or the page has an unknown
+        // it cannot explain and nobody can act on.
+        if ($this->error !== null) {
+            $detail['error'] = $this->error;
+        }
 
         return [
             'state' => $this->summarise($detail),
@@ -252,8 +269,22 @@ final class ShadowbanChecker
                 ->timeout((int) config('xpost.http.timeout', 30))
                 ->post(rtrim((string) config('xpost.links.sorsa.base_url'), '/').'/'.$path, $json);
 
-            return $response->successful() ? (array) $response->json() : null;
-        } catch (Throwable) {
+            if ($response->successful()) {
+                return (array) $response->json();
+            }
+
+            /*
+             * Sorsa says what is wrong -- "request limit exceeded" on a 403,
+             * for one -- and dropping that on the floor is what turned a
+             * spent quota into fifty rows of unexplained "chưa rõ".
+             */
+            $this->error = sprintf('Sorsa %d: %s', $response->status(),
+                $response->json('message') ?? $response->json('detail') ?? 'không rõ lý do');
+
+            return null;
+        } catch (Throwable $e) {
+            $this->error = 'Không gọi được Sorsa: '.$e->getMessage();
+
             /*
              * Swallowed into null rather than thrown. A visibility check is
              * something the operator asked for out of curiosity; it runs over

@@ -446,6 +446,56 @@ class ShadowbanCheckTest extends TestCase
     }
 
     #[Test]
+    public function a_refusal_from_sorsa_comes_back_with_what_it_said(): void
+    {
+        /*
+         * Fifty rows read "không hỏi được" and the page could not say why. The
+         * answer was a flat 403 -- "request limit exceeded", the plan out of
+         * requests -- thrown away one layer down, so the only thing on screen
+         * pointed at X for a problem that was on this side of the wire.
+         */
+        Http::fake(['api.sorsa.io/*' => Http::response(['message' => 'request limit exceeded'], 403)]);
+
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
+
+        $this->assertSame('unknown', $result['state']);
+        $this->assertSame('Sorsa 403: request limit exceeded', $result['detail']['error']);
+    }
+
+    #[Test]
+    public function a_check_that_worked_carries_no_reason(): void
+    {
+        // Or every clean row would sit under an explanation for a failure that
+        // did not happen.
+        $this->fake([$this->profile()], 20);
+
+        $this->assertArrayNotHasKey('error', app(ShadowbanChecker::class)->check('nancy_2z')['detail']);
+    }
+
+    #[Test]
+    public function the_reason_does_not_leak_from_one_handle_to_the_next(): void
+    {
+        // The checker is reused across a sweep, so a reason left behind would
+        // explain the previous handle's failure on this one's row.
+        // One stub for both handles, so the second call is answered by a live
+        // rule rather than by a stub registered after the first stub already won.
+        Http::fake(function ($request) {
+            if (str_contains((string) $request->body(), 'first_one')) {
+                return Http::response(['message' => 'request limit exceeded'], 403);
+            }
+
+            return Http::response(str_contains($request->url(), 'search-users')
+                ? ['users' => [$this->profile()]]
+                : ['tweets' => [['id' => '1']], 'next_cursor' => '']);
+        });
+
+        $checker = app(ShadowbanChecker::class);
+
+        $this->assertSame('Sorsa 403: request limit exceeded', $checker->check('first_one')['detail']['error']);
+        $this->assertArrayNotHasKey('error', $checker->check('nancy_2z')['detail']);
+    }
+
+    #[Test]
     public function a_check_that_dies_leaves_the_row_saying_so(): void
     {
         /*

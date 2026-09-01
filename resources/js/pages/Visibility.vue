@@ -120,6 +120,22 @@ let poller;
 
 const pending = computed(() => rows.value.filter((r) => ! r.checked_at).length);
 
+/*
+ * Why the unknown rows are unknown, said once at the top.
+ *
+ * Fifty rows reading "không hỏi được" with the reason buried one click
+ * deep in each of them is a page that makes someone go looking at X for a
+ * problem that is on this side -- a spent Sorsa quota, in the run that
+ * prompted this. When they all failed for the same reason, say it once.
+ */
+const sharedError = computed(() => {
+    const reasons = new Set(rows.value.map((r) => r.detail?.error).filter(Boolean));
+
+    return reasons.size === 1 ? [...reasons][0] : null;
+});
+
+const unknownRows = computed(() => rows.value.filter((r) => r.detail?.error).length);
+
 async function pollUntilSettled(attempt = 0) {
     clearTimeout(poller);
 
@@ -379,6 +395,13 @@ const verdictClass = {
             {{ flash.message }}
         </div>
 
+        <div v-if="sharedError" class="mb-4 rounded-lg bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200">
+            <span class="font-medium">{{ unknownRows }} handle chưa có kết luận</span> vì lần kiểm tra hỏng: {{ sharedError }}
+            <span v-if="sharedError.includes('403')" class="block mt-1 text-amber-800">
+                Gói Sorsa đã hết lượt gọi. Mỗi handle tốn 2 request. Nâng gói hoặc chờ hạn mức làm mới rồi bấm kiểm tra lại.
+            </span>
+        </div>
+
         <!-- Never checked is its own tile: not the same as checked and unclear. -->
         <div v-if="stats && stats.total" class="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <div v-for="tile in [
@@ -485,7 +508,7 @@ const verdictClass = {
                             </td>
 
                             <td class="px-4 py-2.5">
-                                <span v-if="row.detail?.search" :class="testLabel[row.detail.search]?.class">
+                                <span v-if="row.detail?.search" :title="row.detail?.error" :class="testLabel[row.detail.search]?.class">
                                     {{ testLabel[row.detail.search]?.text }}
                                     <!-- 20 with a cursor behind it is 20+, so
                                          the column must not print it as a total. -->

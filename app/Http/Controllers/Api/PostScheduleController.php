@@ -234,7 +234,10 @@ class PostScheduleController extends Controller
             'template.audience.limit' => ['nullable', 'integer', 'min:1'],
 
             'times' => [$required, 'array', 'min:1', 'max:24'],
-            'times.*' => ['regex:/^\d{1,2}:\d{2}$/'],
+            // A real hour and a real minute: the old pattern took any two
+            // numbers, so "25:00" saved cleanly and became a slot at 01:00 the
+            // next day, having first been counted in the cost estimate.
+            'times.*' => ['regex:/^([01]?\d|2[0-3]):[0-5]\d$/'],
             'days_of_week' => ['nullable', 'array', 'max:7'],
             'days_of_week.*' => ['integer', 'between:1,7'],
             'timezone' => ['nullable', 'timezone:all_with_bc'],

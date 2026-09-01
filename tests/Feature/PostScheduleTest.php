@@ -397,4 +397,99 @@ class PostScheduleTest extends TestCase
             ->getJson("/api/v1/schedules/{$schedule->id}")
             ->assertNotFound();
     }
+
+    #[Test]
+    public function a_schedule_starting_further_out_than_a_week_still_has_a_next_run(): void
+    {
+        /*
+         * The occurrence search looks eight days ahead, which is all a weekly
+         * pattern can need -- but a campaign told to begin in three weeks
+         * matched no day at all and computed no next run. scopeDue reads a null
+         * next_run_at as "never" and nothing recomputes it later, so the
+         * schedule was saved, listed, shown as active, and silently dead.
+         */
+        $schedule = $this->schedule([
+            'times' => ['09:00'],
+            'days_of_week' => [],
+            'starts_on' => now()->addDays(30)->toDateString(),
+            'ends_on' => null,
+        ]);
+
+        $this->assertNotNull($schedule->next_run_at, 'a schedule starting in 30 days would never fire');
+        $this->assertSame(
+            now()->addDays(30)->toDateString(),
+            $schedule->next_run_at->toDateString()
+        );
+    }
+
+    #[Test]
+    public function a_start_date_far_out_still_respects_the_chosen_weekday(): void
+    {
+        // Jumping to the start date must not jump past the day filter with it.
+        $start = now()->addDays(30)->startOfDay();
+        $monday = $start->copy()->next(Carbon::MONDAY);
+
+        $schedule = $this->schedule([
+            'times' => ['09:00'],
+            'days_of_week' => [1],
+            'starts_on' => $start->toDateString(),
+            'ends_on' => null,
+        ]);
+
+        $this->assertSame(1, (int) $schedule->next_run_at->isoWeekday());
+        $this->assertTrue($schedule->next_run_at->greaterThanOrEqualTo($start));
+        $this->assertSame($monday->toDateString(), $schedule->next_run_at->toDateString());
+    }
+
+    #[Test]
+    public function a_window_that_ends_before_it_starts_never_fires(): void
+    {
+        // The jump to the start date must not skip the end check.
+        $schedule = $this->schedule([
+            'times' => ['09:00'],
+            'days_of_week' => [],
+            'starts_on' => now()->addDays(30)->toDateString(),
+            'ends_on' => now()->addDays(20)->toDateString(),
+        ]);
+
+        $this->assertNull($schedule->next_run_at);
+    }
+
+    #[Test]
+    public function an_hour_that_does_not_exist_is_refused(): void
+    {
+        /*
+         * The old rule was any two numbers separated by a colon, so "25:00"
+         * saved cleanly, counted towards the cost estimate, and reached
+         * setTime() -- which rolls it over into 01:00 the following day. A slot
+         * nobody chose, at an hour nobody picked.
+         */
+        $this->actingAs($this->user->refresh());
+
+        foreach (['25:00', '99:99', '12:60'] as $time) {
+            $this->postJson('/api/v1/schedules', [
+                'name' => 'Test',
+                'times' => [$time],
+                'template' => ['body' => 'xin chào', 'audience' => ['mode' => 'all']],
+            ])->assertStatus(422, "{$time} was accepted as a time of day");
+        }
+
+        // The shape that must still be accepted, so the rule is not simply
+        // refusing everything.
+        $this->postJson('/api/v1/schedules', [
+            'name' => 'Test',
+            'times' => ['09:00', '23:59', '0:05'],
+            'template' => ['body' => 'xin chào', 'audience' => ['mode' => 'all']],
+        ])->assertCreated();
+    }
+
+    #[Test]
+    public function a_stored_impossible_hour_is_not_counted_as_a_slot(): void
+    {
+        // Rows written before the rule tightened must not keep inflating the
+        // estimate, which is accounts times slots per day.
+        $schedule = $this->schedule(['times' => ['09:00', '25:00', '99:99']]);
+
+        $this->assertSame(1, $schedule->postsPerDay());
+    }
 }

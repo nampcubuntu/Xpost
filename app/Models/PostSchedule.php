@@ -90,6 +90,23 @@ class PostSchedule extends Model
         $tz = $this->timezone ?: config('app.timezone');
         $cursor = CarbonImmutable::parse($after ?? now())->setTimezone($tz);
 
+        /*
+         * Jump to the start date rather than walking to it.
+         *
+         * The search below looks eight days ahead, which is all a weekly
+         * pattern can need -- but a campaign told to begin in three weeks then
+         * matched no day at all and computed no next run. scopeDue reads a null
+         * next_run_at as "never", and nothing recomputes it later, so the
+         * schedule was saved, listed, shown as active, and silently dead.
+         */
+        if ($this->starts_on) {
+            $firstDay = CarbonImmutable::parse($this->starts_on)->setTimezone($tz)->startOfDay();
+
+            // A second before it, so the first slot on that very day still
+            // counts as "strictly after the cursor".
+            $cursor = $cursor->lt($firstDay) ? $firstDay->subSecond() : $cursor;
+        }
+
         $lastDay = $this->ends_on
             ? CarbonImmutable::parse($this->ends_on)->setTimezone($tz)->endOfDay()
             : null;
@@ -142,16 +159,22 @@ class PostSchedule extends Model
         return count($this->sortedTimes());
     }
 
-    /** @return list<string> HH:MM, ascending, de-duplicated */
+    /**
+     * @return list<string> HH:MM, ascending, de-duplicated
+     *
+     * The hour and minute have to be real ones. The old pattern accepted any
+     * two numbers, so "25:00" and "99:99" were stored, counted towards the cost
+     * estimate, and handed to setTime() -- which rolls them over into whatever
+     * day and hour they land on. A slot nobody chose, at an hour nobody picked.
+     */
     private function sortedTimes(): array
     {
-        $times = collect($this->times ?? [])
-            ->filter(fn ($t) => is_string($t) && preg_match('/^\d{1,2}:\d{2}$/', $t))
+        return collect($this->times ?? [])
+            ->filter(fn ($t) => is_string($t) && preg_match('/^([01]?\d|2[0-3]):[0-5]\d$/', $t))
             ->map(fn (string $t) => sprintf('%02d:%02d', ...array_map('intval', explode(':', $t))))
             ->unique()
             ->sort()
-            ->values();
-
-        return $times->all();
+            ->values()
+            ->all();
     }
 }

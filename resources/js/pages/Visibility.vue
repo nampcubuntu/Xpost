@@ -110,11 +110,81 @@ watch(page, load);
  * look routinely landed before the answer -- and the page then sat there,
  * saying results would appear, with nothing left that would ever fetch them.
  */
+/*
+ * A pasted list, because the pool is a thousand accounts over twenty-one
+ * pages and "check these forty" is a question about a list someone already
+ * has -- not about what happens to be on screen.
+ */
+const showPaste = ref(false);
+const pasteText = ref('');
+
+/** One per line, or comma separated, with or without the @ or a full URL. */
+const pastedHandles = computed(() => pasteText.value
+    .split(/[\n,;]+/)
+    .map((line) => line.trim())
+    .filter(Boolean));
+
+async function checkPasted() {
+    const usernames = pastedHandles.value;
+
+    if (! usernames.length) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        const { data } = await api.post('accounts/visibility', { usernames });
+
+        /*
+         * Named, not counted. "38 of 40" leaves someone holding two handles
+         * they cannot find, which is the failure the proxy and link importers
+         * were built to avoid.
+         */
+        flash.value = data.not_found.length
+            ? {
+                type: 'error',
+                message: `Đã xếp hàng ${data.queued} tài khoản. `
+                    + `${data.not_found.length} handle không có trong pool và được giữ lại trong ô: `
+                    + data.not_found.slice(0, 8).join(', ')
+                    + (data.not_found.length > 8 ? '…' : ''),
+            }
+            : {
+                type: 'ok',
+                message: `Đã xếp hàng ${data.queued} tài khoản. Mỗi tài khoản mất khoảng 3–5 giây; `
+                    + 'trang sẽ tự cập nhật khi có kết quả.',
+            };
+
+        // The unmatched ones stay in the box, alone, so they can be corrected
+        // and sent again rather than hunted for in the original paste.
+        pasteText.value = data.not_found.join('\n');
+        showPaste.value = data.not_found.length > 0;
+
+        awaiting.value = new Set();
+        pollUntilSettled();
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không kiểm tra được.' };
+    } finally {
+        busy.value = false;
+    }
+}
+
 const awaiting = ref(new Set());
 let poller;
 
+/** The "chưa kiểm tra" tile, watched so a pasted run knows when it stops moving. */
+const unchecked = computed(() => stats.value?.by_state?.unchecked ?? null);
+let lastUnchecked = null;
+
 /** Which of the accounts asked for still have no verdict from this round. */
 function stillWaiting() {
+    // A pasted list names handles, not ids, so there is nothing on the page
+    // to tick off -- the queue depth is what settles it, and the stats call
+    // already reports it as accounts leaving "chưa kiểm tra".
+    if (awaiting.value.size === 0) {
+        return unchecked.value !== lastUnchecked;
+    }
+
     return accounts.value.some((a) => awaiting.value.has(a.id) && ! a.visibility_checked_at)
         || [...awaiting.value].some((id) => ! accounts.value.find((a) => a.id === id));
 }
@@ -127,7 +197,11 @@ async function pollUntilSettled(attempt = 0) {
     const wait = Math.min(2000 * 2 ** attempt, 15000);
 
     poller = setTimeout(async () => {
+        const before = unchecked.value;
+
         await Promise.all([load(), loadStats()]);
+
+        lastUnchecked = before;
 
         // Twenty rounds at the cap is about four minutes, which is longer than
         // any single check takes. Past that something is wrong upstream and
@@ -291,11 +365,14 @@ const checkedAt = (iso) => (iso
                 </p>
             </div>
 
-            <button
-                class="xp-btn-primary"
-                :disabled="busy || !selected.size"
-                @click="check([...selected])"
-            >Kiểm tra {{ selected.size || '' }} tài khoản</button>
+            <div class="flex gap-2">
+                <button class="xp-btn-ghost" @click="showPaste = !showPaste">Dán danh sách</button>
+                <button
+                    class="xp-btn-primary"
+                    :disabled="busy || !selected.size"
+                    @click="check([...selected])"
+                >Kiểm tra {{ selected.size || '' }} tài khoản</button>
+            </div>
         </div>
 
         <div
@@ -308,6 +385,33 @@ const checkedAt = (iso) => (iso
             Mỗi tài khoản tốn 2 lượt gọi, nên một lượt quét cả pool bằng hai lần số tài khoản.
         </div>
 
+        <!--
+            A list someone already has, rather than a hunt through the table.
+            The pool is a thousand accounts over twenty-one pages, and ticking
+            forty of them by hand is not a way to ask a question about forty.
+        -->
+        <div v-if="showPaste" class="xp-card mb-4 px-4 py-4">
+            <label class="xp-label">Dán handle — mỗi dòng một cái, hoặc ngăn bằng dấu phẩy</label>
+            <textarea
+                v-model="pasteText"
+                rows="6"
+                class="xp-field mt-1 w-full font-mono text-[12.5px]"
+                placeholder="nancy_2z&#10;@MDN_Design&#10;https://x.com/GoodingAngie"
+            ></textarea>
+            <p class="xp-hint mt-1">
+                Có hay không có <code>@</code> đều được, dán cả link hồ sơ cũng được.
+                Chỉ những handle đã có trong pool mới kiểm tra được — cái nào không thấy sẽ được nêu tên.
+            </p>
+
+            <div class="mt-3 flex items-center gap-2">
+                <button
+                    class="xp-btn-primary"
+                    :disabled="busy || !pastedHandles.length"
+                    @click="checkPasted"
+                >Kiểm tra {{ pastedHandles.length || '' }} handle</button>
+                <button class="xp-btn-ghost" @click="showPaste = false">Đóng</button>
+            </div>
+        </div>
         <div v-if="flash" class="mb-4 rounded-lg px-4 py-3 text-[13px]"
              :class="flash.type === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'">
             {{ flash.message }}

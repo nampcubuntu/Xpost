@@ -22,6 +22,7 @@ use App\Support\TeamContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class AccountController extends Controller
@@ -316,25 +317,62 @@ class AccountController extends Controller
             ], 422);
         }
 
+        /*
+         * Ticked rows, or a pasted list of handles.
+         *
+         * The list is there because the pool is a thousand accounts over
+         * twenty-one pages, and "check these forty" is a question about a list
+         * someone already has -- not about what happens to be on screen.
+         */
         $data = $request->validate([
-            'account_ids' => ['required', 'array', 'min:1', 'max:10000'],
+            'account_ids' => ['array', 'max:10000'],
             'account_ids.*' => ['integer'],
+            'usernames' => ['array', 'max:10000'],
+            'usernames.*' => ['string', 'max:64'],
         ]);
 
+        $handles = collect($data['usernames'] ?? [])
+            // People paste what they have: @handle, a profile URL, a column
+            // from a spreadsheet. The column stores them bare.
+            ->map(fn (string $raw) => strtolower(trim(ltrim(trim($raw), '@'))))
+            ->map(fn (string $h) => str_contains($h, '/') ? strtolower(basename(parse_url($h, PHP_URL_PATH) ?: $h)) : $h)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if (($data['account_ids'] ?? []) === [] && $handles->isEmpty()) {
+            return response()->json(['message' => 'Chưa chọn tài khoản nào và cũng chưa dán handle nào.'], 422);
+        }
+
         $queued = 0;
+        $found = [];
 
         XAccount::query()
-            ->whereIn('id', $data['account_ids'])
+            ->where(function ($q) use ($data, $handles): void {
+                $q->when($data['account_ids'] ?? [], fn ($w, $ids) => $w->orWhereIn('id', $ids))
+                    ->when($handles->isNotEmpty(), fn ($w) => $w->orWhereIn(
+                        DB::raw('LOWER(username)'), $handles->all()
+                    ));
+            })
             // Chunked so ten thousand ids do not become one query the size of
             // the selection.
-            ->chunkById(500, function ($accounts) use (&$queued): void {
+            ->chunkById(500, function ($accounts) use (&$queued, &$found): void {
                 foreach ($accounts as $account) {
                     CheckAccountVisibility::dispatch($account->id, $account->team_id);
+                    $found[] = strtolower((string) $account->username);
                     $queued++;
                 }
             });
 
-        return response()->json(['queued' => $queued], 202);
+        /*
+         * Named, not counted. "38 of 40 queued" leaves someone holding two
+         * handles they cannot find -- the same failure the proxy and link
+         * importers were built to avoid.
+         */
+        return response()->json([
+            'queued' => $queued,
+            'not_found' => $handles->reject(fn (string $h) => in_array($h, $found, true))->values(),
+        ], 202);
     }
 
     /** The pool's visibility at a glance, for the banner on the page. */

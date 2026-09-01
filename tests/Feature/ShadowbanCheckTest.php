@@ -397,4 +397,79 @@ class ShadowbanCheckTest extends TestCase
         $this->assertSame(2, $body['by_state']['unchecked']);
         $this->assertSame(3, array_sum($body['by_state']), 'the tiles do not add up to the pool');
     }
+
+    #[Test]
+    public function a_pasted_list_of_handles_queues_the_accounts_it_matches(): void
+    {
+        /*
+         * The pool is a thousand accounts over twenty-one pages, and "check
+         * these forty" is a question about a list someone already has -- not
+         * about what happens to be on screen.
+         */
+        Queue::fake();
+
+        $this->account('nancy_2z');
+        $this->account('MDN_Design');
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/accounts/visibility', [
+                // People paste what they have: bare, with an @, or a whole URL,
+                // and in whatever case X showed it to them.
+                'usernames' => ['nancy_2z', '@MDN_DESIGN', 'https://x.com/nancy_2z'],
+            ])
+            ->assertStatus(202)
+            // The duplicate is one account, not two jobs.
+            ->assertJsonPath('queued', 2)
+            ->assertJsonPath('not_found', []);
+
+        Queue::assertPushed(CheckAccountVisibility::class, 2);
+    }
+
+    #[Test]
+    public function handles_that_are_not_in_the_pool_are_named(): void
+    {
+        /*
+         * "38 of 40 queued" leaves someone holding two handles they cannot
+         * find in a paste of forty -- the same failure the proxy and link
+         * importers were built to avoid.
+         */
+        Queue::fake();
+
+        $this->account('nancy_2z');
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/accounts/visibility', [
+                'usernames' => ['nancy_2z', 'somebody_else', 'another_stranger'],
+            ])
+            ->assertStatus(202)
+            ->assertJsonPath('queued', 1)
+            ->assertJsonPath('not_found', ['somebody_else', 'another_stranger']);
+    }
+
+    #[Test]
+    public function another_teams_handle_is_not_found_rather_than_checked(): void
+    {
+        // The paste is a list of strings from a browser, and matching on the
+        // name alone would reach across tenants.
+        Queue::fake();
+
+        XAccount::factory()->create(['username' => 'stranger_acct']);
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/accounts/visibility', ['usernames' => ['stranger_acct']])
+            ->assertStatus(202)
+            ->assertJsonPath('queued', 0)
+            ->assertJsonPath('not_found', ['stranger_acct']);
+
+        Queue::assertNothingPushed();
+    }
+
+    #[Test]
+    public function asking_with_neither_a_selection_nor_a_list_is_refused(): void
+    {
+        // Silence here would read as "done" over an empty run.
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/accounts/visibility', [])
+            ->assertStatus(422);
+    }
 }

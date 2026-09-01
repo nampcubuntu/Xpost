@@ -69,12 +69,16 @@ final class ShadowbanChecker
              * `from:handle` returning nothing is a search ban -- unless the
              * account has never posted, which is not a restriction and must not
              * be reported as one.
+             *
+             * The comment above said this before the code did. Running it
+             * against the live API is what found the gap: the first account
+             * tested came back with zero results, and only its tweets_count
+             * settled whether that meant anything.
              */
-            'search' => $posts === null
-                ? self::UNKNOWN
-                : ($posts > 0 ? self::OK : self::RESTRICTED),
+            'search' => $this->searchVerdict($posts, $profile['tweets_count'] ?? null),
 
             'posts_found' => $posts,
+            'posts_total' => $profile['tweets_count'] ?? null,
 
             /*
              * These two are the account's own settings rather than anything X
@@ -91,6 +95,33 @@ final class ShadowbanChecker
             'checked_at' => now()->toIso8601String(),
             'detail' => $detail,
         ];
+    }
+
+    /**
+     * What an empty `from:handle` result actually means.
+     *
+     * Nothing came back is only a ban if there was something to come back. An
+     * account that has never posted is not being hidden, and reporting it as
+     * hidden sends someone looking for a restriction X never applied.
+     *
+     * When the post count could not be read the answer is unknown rather than
+     * either -- guessing in this direction invents the more alarming of the two.
+     */
+    private function searchVerdict(?int $found, ?int $tweetsCount): string
+    {
+        if ($found === null) {
+            return self::UNKNOWN;
+        }
+
+        if ($found > 0) {
+            return self::OK;
+        }
+
+        return match (true) {
+            $tweetsCount === null => self::UNKNOWN,
+            $tweetsCount === 0 => self::UNKNOWN,
+            default => self::RESTRICTED,
+        };
     }
 
     /**
@@ -141,11 +172,15 @@ final class ShadowbanChecker
                 'found' => true,
                 'protected' => (bool) ($user['protected'] ?? false),
                 'sensitive' => (bool) ($user['possibly_sensitive'] ?? false),
+                // How many posts X thinks the account has. Free -- the same
+                // call already returns it -- and it is the difference between
+                // a search ban and an account that has never posted.
+                'tweets_count' => isset($user['tweets_count']) ? (int) $user['tweets_count'] : null,
             ];
         }
 
         // Reached X, and the handle was not among the results.
-        return ['found' => false, 'protected' => null, 'sensitive' => null];
+        return ['found' => false, 'protected' => null, 'sensitive' => null, 'tweets_count' => null];
     }
 
     /** How many of the account's posts search returns, or null when it failed. */

@@ -62,7 +62,7 @@ class ShadowbanCheckTest extends TestCase
     #[Test]
     public function an_account_x_is_not_limiting_reads_as_clear(): void
     {
-        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'possibly_sensitive' => false]], 20);
+        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'possibly_sensitive' => false, 'tweets_count' => 40]], 20);
 
         $result = app(ShadowbanChecker::class)->check($this->account());
 
@@ -88,7 +88,7 @@ class ShadowbanCheckTest extends TestCase
     #[Test]
     public function no_posts_in_search_is_a_search_ban(): void
     {
-        $this->fake([['username' => 'nancy_2z', 'protected' => false]], 0);
+        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 40]], 0);
 
         $result = app(ShadowbanChecker::class)->check($this->account());
 
@@ -120,7 +120,7 @@ class ShadowbanCheckTest extends TestCase
         // the search test did not, so the row cannot say "ok".
         Http::fake([
             'api.sorsa.io/v3/search-users' => Http::response([
-                'users' => [['username' => 'nancy_2z', 'protected' => false]],
+                'users' => [['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 40]],
             ]),
             'api.sorsa.io/v3/search-tweets' => Http::response(['message' => 'boom'], 500),
         ]);
@@ -140,7 +140,7 @@ class ShadowbanCheckTest extends TestCase
          * empty search result there means nothing. Calling it a shadowban would
          * send someone hunting for something X never did.
          */
-        $this->fake([['username' => 'nancy_2z', 'protected' => true]], 0);
+        $this->fake([['username' => 'nancy_2z', 'protected' => true, 'tweets_count' => 40]], 0);
 
         $result = app(ShadowbanChecker::class)->check($this->account());
 
@@ -155,7 +155,7 @@ class ShadowbanCheckTest extends TestCase
         // not echo the case it was asked with.
         $this->fake([
             ['username' => 'nancy_other'],
-            ['username' => 'NANCY_2Z', 'protected' => false],
+            ['username' => 'NANCY_2Z', 'protected' => false, 'tweets_count' => 40],
         ], 5);
 
         $this->assertSame('ok', app(ShadowbanChecker::class)->check($this->account())['state']);
@@ -197,7 +197,7 @@ class ShadowbanCheckTest extends TestCase
     public function the_verdict_is_stored_with_the_moment_it_was_reached(): void
     {
         // A verdict with no date is a claim about now made from whenever.
-        $this->fake([['username' => 'nancy_2z', 'protected' => false]], 12);
+        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 40]], 12);
 
         $account = $this->account();
 
@@ -208,5 +208,47 @@ class ShadowbanCheckTest extends TestCase
         $this->assertSame('ok', $account->visibility_state);
         $this->assertNotNull($account->visibility_checked_at);
         $this->assertSame(12, $account->visibility_detail['posts_found']);
+    }
+
+    #[Test]
+    public function an_account_that_never_posted_is_not_a_search_ban(): void
+    {
+        /*
+         * Found by running against the live API rather than by thinking about
+         * it. The first real account tested returned nothing for
+         * `from:handle`, and only its tweets_count settled whether that meant
+         * anything -- the comment in the code claimed this guard existed
+         * before the code did.
+         *
+         * Nothing came back is only a ban if there was something to come back.
+         */
+        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 0]], 0);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('unknown', $result['detail']['search'], 'an account with no posts was called search-banned');
+        $this->assertNotSame('restricted', $result['state']);
+    }
+
+    #[Test]
+    public function an_account_with_posts_and_none_in_search_is_a_search_ban(): void
+    {
+        // The other side of the same coin, and the real reading on the first
+        // account tested: two posts on the profile, none findable.
+        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 2]], 0);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('restricted', $result['detail']['search']);
+        $this->assertSame(2, $result['detail']['posts_total']);
+    }
+
+    #[Test]
+    public function an_unreadable_post_count_does_not_invent_the_alarming_answer(): void
+    {
+        // Guessing here would manufacture a shadowban out of a missing field.
+        $this->fake([['username' => 'nancy_2z', 'protected' => false]], 0);
+
+        $this->assertSame('unknown', app(ShadowbanChecker::class)->check($this->account())['detail']['search']);
     }
 }

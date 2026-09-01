@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Enums\AccountStatus;
 use App\Events\AccountHealthChanged;
 use App\Models\Team;
+use App\Models\XAccount;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
@@ -110,5 +112,51 @@ class AccountHealthBroadcastTest extends TestCase
         AccountHealthChanged::announce($this->team->id);
 
         $this->assertTrue(true, 'announce() must not throw when the broadcaster cannot send');
+    }
+
+    #[Test]
+    public function every_path_that_moves_a_watched_column_announces(): void
+    {
+        /*
+         * The reason this moved into the observer. It was called from the
+         * publisher's success and failure paths only -- two of the seven places
+         * that write a status -- and the transition an operator most needs to
+         * see is not one of them: an account falls to needs_reauth when its
+         * token will not refresh, and that happens in XOAuth2Service.
+         *
+         * Each case is saved on its own, so each must announce on its own.
+         */
+        $cases = [
+            'status' => fn (XAccount $a) => $a->forceFill(['status' => AccountStatus::NeedsReauth])->save(),
+            'health_score' => fn (XAccount $a) => $a->forceFill(['health_score' => 40])->save(),
+            'cooldown_until' => fn (XAccount $a) => $a->forceFill(['cooldown_until' => now()->addHour()])->save(),
+        ];
+
+        foreach ($cases as $column => $change) {
+            Event::fake([AccountHealthChanged::class]);
+            Cache::flush();
+
+            $change(XAccount::factory()->create(['team_id' => $this->team->id]));
+
+            Event::assertDispatchedTimes(AccountHealthChanged::class, 1, "changing {$column} said nothing");
+        }
+    }
+
+    #[Test]
+    public function a_change_the_page_does_not_render_stays_quiet(): void
+    {
+        /*
+         * Announcing on every save would put a message on the wire for a
+         * follower count sync across the whole pool, which changes nothing the
+         * status or health columns show.
+         */
+        Event::fake([AccountHealthChanged::class]);
+
+        $account = XAccount::factory()->create(['team_id' => $this->team->id]);
+        Event::fake([AccountHealthChanged::class]);
+
+        $account->forceFill(['followers_count' => 999])->save();
+
+        Event::assertNotDispatched(AccountHealthChanged::class);
     }
 }

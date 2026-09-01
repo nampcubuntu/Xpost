@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Observers;
 
+use App\Events\AccountHealthChanged;
 use App\Models\Proxy;
 use App\Models\XAccount;
 use App\Models\XApp;
@@ -30,6 +31,28 @@ class XAccountObserver
         if ($account->wasChanged('proxy_id')) {
             $this->adjustProxy($account->getOriginal('proxy_id'), -1);
             $this->adjustProxy($account->proxy_id, 1);
+        }
+
+        $this->announceIfWatched($account);
+    }
+
+    /**
+     * Tell the accounts page a column it renders has moved.
+     *
+     * Here rather than at the call sites, because there are seven of those and
+     * two of them had it: the publisher's own success and failure paths. The
+     * transition that matters most to whoever is watching -- an account falling
+     * to needs_reauth when its token will not refresh -- happens in
+     * XOAuth2Service and did not, so the most common status change on this
+     * install was the one the page could not see.
+     *
+     * The event carries no account and is throttled per team, so this firing on
+     * every row of a ten thousand account import costs one message.
+     */
+    private function announceIfWatched(XAccount $account): void
+    {
+        if ($account->wasChanged(['status', 'health_score', 'cooldown_until'])) {
+            AccountHealthChanged::announce((int) $account->team_id);
         }
     }
 

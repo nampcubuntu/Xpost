@@ -15,6 +15,7 @@ const routes = [
     { path: '/posts', name: 'posts', component: () => import('./pages/Posts.vue') },
     { path: '/posts/:id', name: 'posts.show', component: () => import('./pages/PostDetail.vue'), props: true },
     { path: '/accounts', name: 'accounts', component: () => import('./pages/Accounts.vue') },
+    { path: '/visibility', name: 'visibility', component: () => import('./pages/Visibility.vue') },
     { path: '/apps', name: 'apps', component: () => import('./pages/Apps.vue') },
     { path: '/proxies', name: 'proxies', component: () => import('./pages/Proxies.vue') },
     { path: '/links', name: 'links', component: () => import('./pages/Links.vue') },

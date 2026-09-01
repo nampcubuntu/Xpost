@@ -1,0 +1,212 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Jobs\CheckAccountVisibility;
+use App\Models\Team;
+use App\Models\XAccount;
+use App\Services\X\ShadowbanChecker;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\Attributes\Test;
+use Tests\TestCase;
+
+/**
+ * Whether X is quietly limiting an account's reach.
+ *
+ * There is no shadowban endpoint anywhere, so the answer is composed from two
+ * calls that exist: does X's people-search return the handle, and does
+ * `from:handle` return any posts. What has to hold is that the three answers
+ * stay three -- "not restricted" and "could not tell" are different things, and
+ * collapsing them reports a clean bill of health for an account never reached.
+ */
+class ShadowbanCheckTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private Team $team;
+
+    private $user;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        [$this->team, $this->user] = $this->tenant();
+
+        config([
+            'xpost.links.sorsa.key' => 'test-key',
+            'xpost.links.sorsa.base_url' => 'https://api.sorsa.io/v3',
+        ]);
+    }
+
+    private function account(string $username = 'nancy_2z'): XAccount
+    {
+        return XAccount::factory()->create(['team_id' => $this->team->id, 'username' => $username]);
+    }
+
+    /** @param  array<int, array<string, mixed>>  $users */
+    private function fake(array $users, int $tweets): void
+    {
+        Http::fake([
+            'api.sorsa.io/v3/search-users' => Http::response(['users' => $users]),
+            'api.sorsa.io/v3/search-tweets' => Http::response([
+                'tweets' => array_fill(0, $tweets, ['id' => '1']),
+            ]),
+        ]);
+    }
+
+    #[Test]
+    public function an_account_x_is_not_limiting_reads_as_clear(): void
+    {
+        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'possibly_sensitive' => false]], 20);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('ok', $result['state']);
+        $this->assertSame('ok', $result['detail']['search']);
+        $this->assertSame('ok', $result['detail']['search_suggestion']);
+        $this->assertSame(20, $result['detail']['posts_found']);
+    }
+
+    #[Test]
+    public function a_handle_search_will_not_return_is_a_suggestion_ban(): void
+    {
+        // Reached X, and the handle was not among the results -- which is the
+        // classic search suggestion ban.
+        $this->fake([['username' => 'someone_else', 'protected' => false]], 20);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('restricted', $result['state']);
+        $this->assertSame('restricted', $result['detail']['search_suggestion']);
+    }
+
+    #[Test]
+    public function no_posts_in_search_is_a_search_ban(): void
+    {
+        $this->fake([['username' => 'nancy_2z', 'protected' => false]], 0);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('restricted', $result['state']);
+        $this->assertSame('restricted', $result['detail']['search']);
+    }
+
+    #[Test]
+    public function a_failed_call_is_unknown_and_never_clear(): void
+    {
+        /*
+         * The whole point of three states. A check that could not reach X has
+         * cleared nothing, and reporting it as "no restrictions detected" is
+         * the same lie as a proxy showing healthy from a check five days ago.
+         */
+        Http::fake(['api.sorsa.io/*' => Http::response(['message' => 'rate limited'], 429)]);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('unknown', $result['state']);
+        $this->assertSame('unknown', $result['detail']['search']);
+        $this->assertSame('unknown', $result['detail']['search_suggestion']);
+    }
+
+    #[Test]
+    public function one_call_failing_does_not_clear_the_other(): void
+    {
+        // A partial answer is still partial. The suggestion test succeeded and
+        // the search test did not, so the row cannot say "ok".
+        Http::fake([
+            'api.sorsa.io/v3/search-users' => Http::response([
+                'users' => [['username' => 'nancy_2z', 'protected' => false]],
+            ]),
+            'api.sorsa.io/v3/search-tweets' => Http::response(['message' => 'boom'], 500),
+        ]);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('unknown', $result['state']);
+        $this->assertSame('ok', $result['detail']['search_suggestion']);
+        $this->assertSame('unknown', $result['detail']['search']);
+    }
+
+    #[Test]
+    public function a_private_account_is_not_reported_as_shadowbanned(): void
+    {
+        /*
+         * The visibility tests cannot see a protected account by design, so an
+         * empty search result there means nothing. Calling it a shadowban would
+         * send someone hunting for something X never did.
+         */
+        $this->fake([['username' => 'nancy_2z', 'protected' => true]], 0);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('protected', $result['state']);
+        $this->assertTrue($result['detail']['protected']);
+    }
+
+    #[Test]
+    public function the_handle_is_matched_whatever_case_x_returns_it_in(): void
+    {
+        // The account is rarely the first result for its own name, and X does
+        // not echo the case it was asked with.
+        $this->fake([
+            ['username' => 'nancy_other'],
+            ['username' => 'NANCY_2Z', 'protected' => false],
+        ], 5);
+
+        $this->assertSame('ok', app(ShadowbanChecker::class)->check($this->account())['state']);
+    }
+
+    #[Test]
+    public function a_sweep_is_queued_rather_than_answered_inline(): void
+    {
+        /*
+         * Two Sorsa calls per account against a flat twenty a second, so a
+         * thousand accounts is a hundred seconds at best -- not something to
+         * hold an HTTP request open for.
+         */
+        Queue::fake();
+
+        $ids = [$this->account('a')->id, $this->account('b')->id];
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/accounts/visibility', ['account_ids' => $ids])
+            ->assertStatus(202)
+            ->assertJsonPath('queued', 2);
+
+        Queue::assertPushed(CheckAccountVisibility::class, 2);
+    }
+
+    #[Test]
+    public function without_a_key_the_page_is_told_rather_than_shown_empty_rows(): void
+    {
+        // A column of blanks looks like every account being fine. It is a
+        // missing setting, and only the message can tell them apart.
+        config(['xpost.links.sorsa.key' => null]);
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/accounts/visibility', ['account_ids' => [$this->account()->id]])
+            ->assertStatus(422);
+    }
+
+    #[Test]
+    public function the_verdict_is_stored_with_the_moment_it_was_reached(): void
+    {
+        // A verdict with no date is a claim about now made from whenever.
+        $this->fake([['username' => 'nancy_2z', 'protected' => false]], 12);
+
+        $account = $this->account();
+
+        (new CheckAccountVisibility($account->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+
+        $account->refresh();
+
+        $this->assertSame('ok', $account->visibility_state);
+        $this->assertNotNull($account->visibility_checked_at);
+        $this->assertSame(12, $account->visibility_detail['posts_found']);
+    }
+}

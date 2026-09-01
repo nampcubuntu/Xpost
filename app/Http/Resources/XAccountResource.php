@@ -35,6 +35,12 @@ class XAccountResource extends JsonResource
             'status' => $this->status->value,
             'status_label' => $this->status->label(),
             'health_score' => $this->health_score,
+            // What X's own search says about this account, and when it was
+            // last asked -- a verdict with no date is a claim about now made
+            // from whenever.
+            'visibility_state' => $this->visibility_state,
+            'visibility_checked_at' => $this->visibility_checked_at?->toIso8601String(),
+            'visibility_detail' => $this->visibility_detail,
             'daily_post_cap' => $this->daily_post_cap,
             'consecutive_failures' => $this->consecutive_failures,
 

@@ -9,10 +9,12 @@ use App\Enums\CredentialType;
 use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\XAccountResource;
+use App\Jobs\CheckAccountVisibility;
 use App\Jobs\RefreshAccountToken;
 use App\Models\AccountGroup;
 use App\Models\XAccount;
 use App\Services\Proxies\ProxyAssigner;
+use App\Services\X\ShadowbanChecker;
 use App\Services\X\TimezoneGuesser;
 use App\Services\X\XAdsAccountLister;
 use App\Services\X\XAppSelector;
@@ -40,6 +42,10 @@ class AccountController extends Controller
                 fn ($g) => $g->where('account_groups.id', $id)
             ))
             ->when($request->boolean('needs_reauth'), fn ($q) => $q->where('status', AccountStatus::NeedsReauth->value))
+            // Filtered here rather than in the browser: a pool of a thousand
+            // shows fifty at a time, and "the restricted ones" is a question
+            // about the pool.
+            ->when($request->query('visibility'), fn ($q, $v) => $q->where('visibility_state', $v))
             // The accounts still leaving from the server's own IP, which is the
             // set the proxy picker is nearly always after.
             ->when($request->boolean('without_proxy'), fn ($q) => $q->whereNull('proxy_id'))
@@ -292,6 +298,68 @@ class AccountController extends Controller
     }
 
     /** Counts for the sidebar badges, in one query instead of six. */
+    /**
+     * Whether X is limiting these accounts, asked now.
+     *
+     * Queued rather than answered inline: the check is two Sorsa calls per
+     * account against a flat twenty requests a second, so a thousand accounts
+     * is a hundred seconds at best. The page marks them queued and watches the
+     * verdicts arrive, the same way the proxy checks do.
+     */
+    public function checkVisibility(Request $request, ShadowbanChecker $checker): JsonResponse
+    {
+        $this->authorize('create', XAccount::class);
+
+        if (! $checker->isConfigured()) {
+            return response()->json([
+                'message' => 'Chưa cấu hình SORSA_API_KEY trong .env, nên không kiểm tra được.',
+            ], 422);
+        }
+
+        $data = $request->validate([
+            'account_ids' => ['required', 'array', 'min:1', 'max:10000'],
+            'account_ids.*' => ['integer'],
+        ]);
+
+        $queued = 0;
+
+        XAccount::query()
+            ->whereIn('id', $data['account_ids'])
+            // Chunked so ten thousand ids do not become one query the size of
+            // the selection.
+            ->chunkById(500, function ($accounts) use (&$queued): void {
+                foreach ($accounts as $account) {
+                    CheckAccountVisibility::dispatch($account->id, $account->team_id);
+                    $queued++;
+                }
+            });
+
+        return response()->json(['queued' => $queued], 202);
+    }
+
+    /** The pool's visibility at a glance, for the banner on the page. */
+    public function visibilityStats(ShadowbanChecker $checker): JsonResponse
+    {
+        $this->authorize('viewAny', XAccount::class);
+
+        $byState = XAccount::query()
+            ->selectRaw('visibility_state, COUNT(*) as aggregate')
+            ->groupBy('visibility_state')
+            ->pluck('aggregate', 'visibility_state');
+
+        return response()->json([
+            'configured' => $checker->isConfigured(),
+            'by_state' => [
+                'ok' => (int) $byState->get('ok', 0),
+                'restricted' => (int) $byState->get('restricted', 0),
+                'protected' => (int) $byState->get('protected', 0),
+                'unknown' => (int) $byState->get('unknown', 0),
+                // Never asked, which is not the same as asked and unclear.
+                'unchecked' => (int) $byState->get('', 0) + (int) $byState->get(null, 0),
+            ],
+        ]);
+    }
+
     public function stats(): JsonResponse
     {
         $this->authorize('viewAny', XAccount::class);

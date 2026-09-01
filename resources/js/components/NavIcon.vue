@@ -56,6 +56,7 @@ const paths = {
     logout: 'M6 13.5H3.5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1H6M10 11l3-3-3-3M13 8H6',
     selector: 'M5.5 6.5 8 4l2.5 2.5M5.5 9.5 8 12l2.5-2.5',
     chevron: 'M4.5 6.5 8 10l3.5-3.5',
+    eye: 'M1.6 8s2.6-4.4 6.4-4.4S14.4 8 14.4 8s-2.6 4.4-6.4 4.4S1.6 8 1.6 8ZM8 9.9a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z',
     check: 'M3.5 8.5 6.5 11.5 12.5 5',
     // A funnel, the way Ads Manager marks its filter button.
     filter: 'M2.5 3.5h11l-4.3 5v4.2l-2.4 1.3V8.5Z',

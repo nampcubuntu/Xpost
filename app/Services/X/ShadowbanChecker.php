@@ -1,0 +1,186 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services\X;
+
+use App\Models\XAccount;
+use Illuminate\Support\Facades\Http;
+use Throwable;
+
+/**
+ * Whether X is quietly limiting what an account can reach.
+ *
+ * There is no shadowban endpoint anywhere. Sorsa's own is a browser tool, not
+ * an API -- so this composes the answer from two calls that do exist, which is
+ * why it is a service rather than a client method:
+ *
+ *   search-users  with the bare handle  -> does X's own people-search return
+ *                                          it, and what does the profile say
+ *                                          about itself
+ *   search-tweets with `from:handle`    -> do the account's posts appear in
+ *                                          search at all
+ *
+ * Two requests, not four: the user search answers the suggestion ban, the
+ * sensitive flag and the protected flag together.
+ *
+ * Every verdict distinguishes three states, never two. "Not restricted" and
+ * "could not tell" are different answers, and collapsing them is how a page
+ * ends up reporting a clean bill of health for an account it never reached --
+ * which is the same lie as a proxy showing "healthy" from a check five days
+ * ago.
+ */
+final class ShadowbanChecker
+{
+    public const OK = 'ok';
+
+    public const RESTRICTED = 'restricted';
+
+    public const UNKNOWN = 'unknown';
+
+    public function isConfigured(): bool
+    {
+        return filled(config('xpost.links.sorsa.key'));
+    }
+
+    /**
+     * One account, as far as two requests can tell.
+     *
+     * @return array{state: string, checked_at: string, detail: array<string, mixed>}
+     */
+    public function check(XAccount $account): array
+    {
+        $handle = ltrim((string) $account->username, '@');
+
+        $profile = $this->searchUsers($handle);
+        $posts = $this->searchTweets($handle);
+
+        $detail = [
+            /*
+             * A handle X will not autocomplete is the classic search suggestion
+             * ban. Matched case-insensitively and across the whole page,
+             * because the account is rarely the first result for its own name.
+             */
+            'search_suggestion' => $profile === null
+                ? self::UNKNOWN
+                : ($profile['found'] ? self::OK : self::RESTRICTED),
+
+            /*
+             * `from:handle` returning nothing is a search ban -- unless the
+             * account has never posted, which is not a restriction and must not
+             * be reported as one.
+             */
+            'search' => $posts === null
+                ? self::UNKNOWN
+                : ($posts > 0 ? self::OK : self::RESTRICTED),
+
+            'posts_found' => $posts,
+
+            /*
+             * These two are the account's own settings rather than anything X
+             * imposed, and they are here because they explain a restricted
+             * verdict above: a protected account cannot appear in search at
+             * all, so a search ban reading on one means nothing.
+             */
+            'protected' => $profile['protected'] ?? null,
+            'sensitive' => $profile['sensitive'] ?? null,
+        ];
+
+        return [
+            'state' => $this->summarise($detail),
+            'checked_at' => now()->toIso8601String(),
+            'detail' => $detail,
+        ];
+    }
+
+    /**
+     * The row's one-word answer.
+     *
+     * A protected account is reported as its own state rather than as
+     * restricted: the tests above cannot see it by design, and calling that a
+     * shadowban would send someone hunting for something X never did.
+     */
+    private function summarise(array $detail): string
+    {
+        if ($detail['protected'] === true) {
+            return 'protected';
+        }
+
+        if (in_array(self::RESTRICTED, [$detail['search_suggestion'], $detail['search']], true)) {
+            return self::RESTRICTED;
+        }
+
+        // Unknown wins over ok: a check that could not reach X has not cleared
+        // anything.
+        if (in_array(self::UNKNOWN, [$detail['search_suggestion'], $detail['search']], true)) {
+            return self::UNKNOWN;
+        }
+
+        return self::OK;
+    }
+
+    /**
+     * The handle as X's people search sees it, or null when the call failed.
+     *
+     * @return array{found: bool, protected: ?bool, sensitive: ?bool}|null
+     */
+    private function searchUsers(string $handle): ?array
+    {
+        $body = $this->post('search-users', ['query' => $handle]);
+
+        if ($body === null) {
+            return null;
+        }
+
+        foreach ((array) ($body['users'] ?? []) as $user) {
+            if (strcasecmp((string) ($user['username'] ?? ''), $handle) !== 0) {
+                continue;
+            }
+
+            return [
+                'found' => true,
+                'protected' => (bool) ($user['protected'] ?? false),
+                'sensitive' => (bool) ($user['possibly_sensitive'] ?? false),
+            ];
+        }
+
+        // Reached X, and the handle was not among the results.
+        return ['found' => false, 'protected' => null, 'sensitive' => null];
+    }
+
+    /** How many of the account's posts search returns, or null when it failed. */
+    private function searchTweets(string $handle): ?int
+    {
+        $body = $this->post('search-tweets', [
+            'query' => "from:{$handle}",
+            // Newest first: an old post surfacing says nothing about whether
+            // what was published this week can be found.
+            'order' => 'latest',
+        ]);
+
+        return $body === null ? null : count((array) ($body['tweets'] ?? []));
+    }
+
+    /**
+     * @return array<string, mixed>|null null when the call did not succeed
+     */
+    private function post(string $path, array $json): ?array
+    {
+        try {
+            $response = Http::withHeaders(['ApiKey' => (string) config('xpost.links.sorsa.key')])
+                ->acceptJson()
+                ->timeout((int) config('xpost.http.timeout', 30))
+                ->post(rtrim((string) config('xpost.links.sorsa.base_url'), '/').'/'.$path, $json);
+
+            return $response->successful() ? (array) $response->json() : null;
+        } catch (Throwable) {
+            /*
+             * Swallowed into null rather than thrown. A visibility check is
+             * something the operator asked for out of curiosity; it runs over
+             * a thousand accounts, and Sorsa being down is a row that says
+             * "unknown", not a failed sweep.
+             */
+            return null;
+        }
+    }
+}

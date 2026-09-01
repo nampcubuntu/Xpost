@@ -257,10 +257,31 @@ return [
         /*
          * Shortening the short link again, through TinyURL.
          *
-         * The token is optional: without one the legacy endpoint is used, which
-         * needs no account but cannot set an alias or report clicks. Get a
-         * token at tinyurl.com/app/settings/api to lift both.
+         * The token is required. Without one the only endpoint available is
+         * the anonymous one, and TinyURL sends links minted there through a
+         * ten second interstitial rather than to the destination -- which is
+         * worse than not shortening at all. Get one at
+         * tinyurl.com/app/settings/api; "Create TinyURL" is the only
+         * permission needed.
          */
+        /*
+         * Whether X is quietly limiting an account's reach.
+         *
+         * There is no shadowban endpoint anywhere -- Sorsa's own is a browser
+         * tool, not an API -- so the check is composed from two calls that do
+         * exist, and that is the whole reason this has a service rather than a
+         * client method. See ShadowbanChecker.
+         *
+         * A key is required. Sorsa gives 100 free requests to start; a sweep
+         * costs two per account, so a thousand accounts is two thousand.
+         */
+        'sorsa' => [
+            'key' => env('SORSA_API_KEY'),
+            'base_url' => env('SORSA_BASE_URL', 'https://api.sorsa.io/v3'),
+            // Flat 20 requests a second on every plan, so a sweep of a thousand
+            // accounts is a hundred seconds at best and belongs on the queue.
+            'requests_per_second' => (int) env('SORSA_RPS', 20),
+        ],
         'tinyurl' => [
             'enabled' => (bool) env('TINYURL_ENABLED', false),
             'token' => env('TINYURL_TOKEN'),

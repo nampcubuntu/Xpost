@@ -50,6 +50,7 @@ const nav = [
         heading: 'Công cụ',
         items: [
             { name: 'accounts', label: 'Tài khoản X', icon: 'accounts', ability: 'manage_accounts' },
+            { name: 'visibility', label: 'Hiển thị', icon: 'eye', ability: 'manage_accounts' },
             { name: 'apps', label: 'X Apps', icon: 'apps', ability: 'manage_infrastructure' },
             { name: 'proxies', label: 'Proxy', icon: 'globe', ability: 'manage_infrastructure' },
             { name: 'links', label: 'Short link', icon: 'link', ability: 'manage_infrastructure' },

@@ -88,6 +88,8 @@ Route::prefix('v1')->group(function (): void {
             Route::get('accounts/{account}/ads-accounts', [AccountController::class, 'adsAccounts']);
             Route::apiResource('accounts', AccountController::class)->except(['store']);
 
+            Route::post('accounts/visibility', [AccountController::class, 'checkVisibility']);
+            Route::get('accounts/visibility/stats', [AccountController::class, 'visibilityStats']);
             Route::apiResource('account-groups', AccountGroupController::class)->except(['show']);
             Route::post('account-groups/{account_group}/sync', [AccountGroupController::class, 'sync']);
 

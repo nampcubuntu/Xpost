@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import api, { validationErrors } from '../lib/api';
 import { cached, swr } from '../lib/cache';
+import NavIcon from '../components/NavIcon.vue';
 
 const proxies = ref([]);
 const meta = ref(null);
@@ -97,10 +98,17 @@ const blank = () => ({
 
 const form = reactive(blank());
 
+/*
+ * Only the verdict that needs acting on carries a ring.
+ *
+ * Healthy is the answer on most rows most of the time, so it should read as
+ * background; dead is the one that costs a campaign, and among fifty rows it
+ * has to be findable without reading each one.
+ */
 const healthClass = {
     healthy: 'bg-green-50 text-green-700',
-    degraded: 'bg-amber-50 text-amber-700',
-    dead: 'bg-red-50 text-red-700',
+    degraded: 'bg-amber-50 text-amber-800 ring-1 ring-amber-200',
+    dead: 'bg-red-50 text-red-700 ring-1 ring-red-200',
     unknown: 'bg-neutral-100 text-neutral-500',
 };
 
@@ -756,11 +764,20 @@ async function remove(proxy) {
                 </option>
             </select>
 
-            <button class="text-[12.5px] text-neutral-500 underline-offset-2 hover:underline" @click="managing = true">
+            <!--
+                A button, at the height of the fields beside it. As bare
+                underlined text next to two selects it read as a caption on the
+                one before it rather than as something to press.
+            -->
+            <button
+                class="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-[13px] text-neutral-600 transition hover:border-neutral-400 hover:bg-neutral-50"
+                @click="managing = true"
+            >
+                <NavIcon name="apps" :size="13" class="text-neutral-400" />
                 Quản lý nhóm
             </button>
 
-            <span v-if="meta" class="ml-auto text-[12.5px] text-neutral-500">
+            <span v-if="meta" class="ml-auto text-[12.5px] tabular-nums text-neutral-500">
                 {{ meta.total.toLocaleString('vi-VN') }} proxy
             </span>
         </div>
@@ -774,43 +791,65 @@ async function remove(proxy) {
             class="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-neutral-900/10 bg-neutral-900 px-4 py-2.5 text-[13px] text-white"
         >
             <span class="font-medium">Đã chọn {{ selected.size }}</span>
-            <button class="rounded px-2 py-1 transition hover:bg-white/15" :disabled="busy" @click="openPicker">
-                Gắn tài khoản
-            </button>
-            <button class="rounded px-2 py-1 transition hover:bg-white/15" :disabled="busy" @click="checkSelected">
-                Kiểm tra
-            </button>
 
             <!--
-                A select rather than a dialog: picking a name off a short list is
-                the whole interaction, and it resets itself so the same group can
-                be chosen again for the next selection.
-            -->
-            <select
-                class="rounded bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/15 disabled:opacity-50"
-                :disabled="busy || !groups.length"
-                :value="''"
-                @change="assignGroup($event.target.value); $event.target.value = ''"
-            >
-                <option value="" class="text-neutral-900">Gán nhóm…</option>
-                <option v-for="row in groups" :key="row.id" :value="row.id" class="text-neutral-900">
-                    {{ row.name }}
-                </option>
-            </select>
+                Surfaces, not bare words.
 
-            <!-- Only while a group is being viewed, because only then does
-                 "bỏ khỏi nhóm" name a group without asking which. -->
+                These read as labels sitting on a black strip, which is what a
+                button with no background on a coloured bar always reads as. And
+                the destructive one sat in the same row as the routine ones,
+                two pixels from "Kiểm tra".
+            -->
+            <div class="flex flex-wrap items-center gap-1.5">
+                <button
+                    class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
+                    :disabled="busy"
+                    @click="openPicker"
+                >Gắn tài khoản</button>
+
+                <button
+                    class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
+                    :disabled="busy"
+                    @click="checkSelected"
+                >Kiểm tra</button>
+
+                <!--
+                    A select rather than a dialog: picking a name off a short
+                    list is the whole interaction, and it resets itself so the
+                    same group can be chosen again for the next selection.
+                -->
+                <select
+                    class="rounded-md border-0 bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/20 focus:ring-1 focus:ring-white/40 disabled:opacity-40"
+                    :disabled="busy || !groups.length"
+                    :value="''"
+                    @change="assignGroup($event.target.value); $event.target.value = ''"
+                >
+                    <option value="" class="text-neutral-900">Gán nhóm…</option>
+                    <option v-for="row in groups" :key="row.id" :value="row.id" class="text-neutral-900">
+                        {{ row.name }}
+                    </option>
+                </select>
+
+                <!-- Only while a group is being viewed, because only then does
+                     "bỏ khỏi nhóm" name a group without asking which. -->
+                <button
+                    v-if="group"
+                    class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
+                    :disabled="busy"
+                    @click="removeFromGroup"
+                >Bỏ khỏi nhóm</button>
+            </div>
+
+            <!-- Set apart, so the one action that cannot be undone is not
+                 adjacent to the ones that can. -->
+            <span class="h-5 w-px bg-white/20"></span>
+
             <button
-                v-if="group"
-                class="rounded px-2 py-1 transition hover:bg-white/15"
+                class="rounded-md px-2.5 py-1 text-red-300 transition hover:bg-red-500/20 hover:text-red-200 disabled:opacity-40"
                 :disabled="busy"
-                @click="removeFromGroup"
-            >
-                Bỏ khỏi nhóm
-            </button>
-            <button class="rounded px-2 py-1 text-red-300 transition hover:bg-white/15" :disabled="busy" @click="removeSelected">
-                Xoá
-            </button>
+                @click="removeSelected"
+            >Xoá</button>
+
             <button class="ml-auto text-white/60 transition hover:text-white" @click="selected = new Set()">Bỏ chọn</button>
         </div>
 
@@ -1058,12 +1097,33 @@ async function remove(proxy) {
                         </td>
                         <td class="px-4 py-3 text-neutral-600">{{ proxy.latency_ms ? `${proxy.latency_ms} ms` : '—' }}</td>
                         <td class="px-4 py-3 text-neutral-600">{{ proxy.assigned_count }}/{{ proxy.max_accounts }}</td>
+                        <!--
+                            Calm by default, coloured on intent.
+
+                            Three colours on every row is fifty rows of blue,
+                            grey and red competing, and the permanent red was
+                            pulling the eye to the one action nobody wants to
+                            reach for by accident. "Kiểm tra" keeps a surface
+                            because it is the one people come here to press.
+                        -->
                         <td class="px-4 py-3 text-right">
-                            <button class="mr-2 text-blue-600 hover:underline" :disabled="checking.has(proxy.id)" @click="check(proxy)">
-                                {{ checking.has(proxy.id) ? 'Đang kiểm tra…' : 'Kiểm tra' }}
-                            </button>
-                            <button class="mr-2 text-neutral-600 hover:underline" @click="startEdit(proxy)">Sửa</button>
-                            <button class="text-red-600 hover:underline" @click="remove(proxy)">Xoá</button>
+                            <div class="flex items-center justify-end gap-1">
+                                <button
+                                    class="rounded-md border border-neutral-200 px-2.5 py-1 text-[12.5px] text-neutral-700 transition hover:border-neutral-300 hover:bg-neutral-50 disabled:opacity-50"
+                                    :disabled="checking.has(proxy.id)"
+                                    @click="check(proxy)"
+                                >{{ checking.has(proxy.id) ? 'Đang kiểm tra…' : 'Kiểm tra' }}</button>
+
+                                <button
+                                    class="rounded-md px-2 py-1 text-[12.5px] text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900"
+                                    @click="startEdit(proxy)"
+                                >Sửa</button>
+
+                                <button
+                                    class="rounded-md px-2 py-1 text-[12.5px] text-neutral-500 transition hover:bg-red-50 hover:text-red-600"
+                                    @click="remove(proxy)"
+                                >Xoá</button>
+                            </div>
                         </td>
                     </tr>
                 </tbody>

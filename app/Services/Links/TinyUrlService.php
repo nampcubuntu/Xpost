@@ -6,6 +6,7 @@ namespace App\Services\Links;
 
 use App\Models\TinyLink;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -34,6 +35,25 @@ final class TinyUrlService
     private const BATCH = 10;
 
     /**
+     * Set once TinyURL says the account is out of links.
+     *
+     * Shared across workers and requests: the limit belongs to the account,
+     * not to the link being minted, so one refusal settles the rest of a
+     * page. Short-lived, so a run after the allowance resets is not held
+     * down by an old answer.
+     */
+    private const LIMIT_KEY = 'tinyurl:limit-reached';
+
+    /**
+     * Why the last mint produced nothing, when it produced nothing.
+     *
+     * TinyURL says "TinyURL links limit reached." in the body of a 422 and
+     * this threw it away, so the page showed a Rút gọn button that had
+     * already failed and would fail again on every press.
+     */
+    private ?string $error = null;
+
+    /**
      * Enabled means able to produce a link worth having.
      *
      * The token is part of that now. Without one the only endpoint available is
@@ -50,6 +70,12 @@ final class TinyUrlService
     {
         return (bool) config('xpost.links.tinyurl.enabled', false)
             && filled(config('xpost.links.tinyurl.token'));
+    }
+
+    /** Why the last mint came back empty, or null if it did not. */
+    public function lastError(): ?string
+    {
+        return $this->error ?? Cache::get(self::LIMIT_KEY);
     }
 
     /** Whatever is already known for these targets, so nothing is re-minted. */
@@ -144,7 +170,7 @@ final class TinyUrlService
 
         // Same rule as isEnabled(): without a token the only endpoint left
         // mints links that detour through an interstitial.
-        if ($token === '') {
+        if ($token === '' || Cache::has(self::LIMIT_KEY)) {
             return array_replace(array_fill_keys($targetUrls, null), $known);
         }
 
@@ -166,6 +192,12 @@ final class TinyUrlService
                 if ($tiny !== null) {
                     $minted[$url] = $tiny;
                 }
+            }
+
+            // The allowance is gone; the remaining chunks would only
+            // spend it further to be told so again.
+            if (Cache::has(self::LIMIT_KEY)) {
+                break;
             }
         }
 
@@ -212,11 +244,43 @@ final class TinyUrlService
             return null;
         }
 
-        return $response->failed() ? null : $response->json('data.tiny_url');
+        if ($response->failed()) {
+            $this->noteFailure($response);
+
+            return null;
+        }
+
+        return $response->json('data.tiny_url');
+    }
+
+    /**
+     * What TinyURL said, kept rather than dropped.
+     *
+     * A spent allowance is the account's, not this link's, so it settles
+     * every mint behind it -- otherwise "Rút gọn cả trang" spends fifty
+     * requests discovering the same 422 fifty times.
+     */
+    private function noteFailure(Response $response): void
+    {
+        $said = $response->json('errors.0') ?? $response->json('message') ?? 'không rõ lý do';
+
+        $this->error = sprintf('TinyURL %d: %s', $response->status(), $said);
+
+        if (stripos((string) $said, 'limit') !== false) {
+            Cache::put(self::LIMIT_KEY, $this->error, now()->addMinutes(10));
+        }
+
+        Log::channel('xpost')->warning('TinyURL refused', ['reason' => $this->error]);
     }
 
     private function mint(string $targetUrl, ?string $alias): ?string
     {
+        // Already known to be out of links, so this request is spent before
+        // it is made.
+        if (Cache::has(self::LIMIT_KEY)) {
+            return null;
+        }
+
         $token = (string) config('xpost.links.tinyurl.token');
         $timeout = (int) config('xpost.http.timeout', 30);
 
@@ -240,7 +304,13 @@ final class TinyUrlService
              * A taken alias is the one failure worth retrying differently: the
              * link is still wanted, just not under that name.
              */
-            return $alias === null ? null : $this->mint($targetUrl, null);
+            if ($alias !== null) {
+                return $this->mint($targetUrl, null);
+            }
+
+            $this->noteFailure($response);
+
+            return null;
         }
 
         return $response->json('data.tiny_url');

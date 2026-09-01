@@ -231,6 +231,76 @@ class TinyUrlTest extends TestCase
     }
 
     #[Test]
+    public function a_refusal_comes_back_with_what_tinyurl_said(): void
+    {
+        /*
+         * What the user hit: entries saved, no tiny link, and a Rút gọn button
+         * that had already failed and would fail again on every press. TinyURL
+         * had said "TinyURL links limit reached." in the body of a 422 and this
+         * threw it away, so the page pointed at nothing.
+         */
+        $this->fake([
+            'api.tinyurl.com/*' => Http::response([
+                'data' => [], 'code' => 5, 'errors' => ['TinyURL links limit reached.'],
+            ], 422),
+        ]);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['key' => 'abc', 'value' => 'https://imgur.com/a/x'])
+            ->assertCreated()
+            // The entry still saved: the mint runs after the KV write and must
+            // not undo one that landed.
+            ->assertJsonPath('data.key', 'r:abc')
+            ->assertJsonPath('data.tiny_url', null)
+            ->assertJsonPath('tiny_error', 'TinyURL 422: TinyURL links limit reached.');
+    }
+
+    #[Test]
+    public function a_spent_allowance_stops_the_rest_of_the_page(): void
+    {
+        /*
+         * "Rút gọn cả trang" is fifty mints. Once the account is out of links
+         * every one of them buys the same 422, and the requests they spend are
+         * what the page needs when the allowance comes back.
+         */
+        $this->fake([
+            'api.tinyurl.com/*' => Http::response([
+                'data' => [], 'errors' => ['TinyURL links limit reached.'],
+            ], 422),
+        ]);
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['key' => 'first', 'value' => 'https://imgur.com/a/x'])
+            ->assertCreated();
+
+        $spent = count(Http::recorded(fn ($r) => str_contains($r->url(), 'tinyurl.com')));
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links/shorten', ['keys' => ['r:a', 'r:b', 'r:c']])
+            ->assertOk()
+            ->assertJsonPath('tiny_error', 'TinyURL 422: TinyURL links limit reached.');
+
+        $this->assertCount(
+            $spent,
+            Http::recorded(fn ($r) => str_contains($r->url(), 'tinyurl.com')),
+            'the page kept minting after the account ran out of links',
+        );
+    }
+
+    #[Test]
+    public function a_link_that_worked_carries_no_reason(): void
+    {
+        // Or every successful row would sit under an explanation for a failure
+        // that did not happen.
+        $this->fake();
+
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/links', ['key' => 'abc', 'value' => 'https://imgur.com/a/x'])
+            ->assertCreated()
+            ->assertJsonPath('tiny_error', null);
+    }
+
+    #[Test]
     public function nothing_is_shortened_while_it_is_switched_off(): void
     {
         $this->fake();

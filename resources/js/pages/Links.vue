@@ -169,9 +169,13 @@ async function shortenRows(keys) {
             : row));
 
         const made = Object.values(data.data).filter(Boolean).length;
-        flash.value = made
-            ? { type: 'ok', message: `Đã rút gọn ${made} link.` }
-            : { type: 'error', message: 'TinyURL không trả về link nào.' };
+        const missed = Object.values(data.data).length - made;
+
+        flash.value = data.tiny_error
+            ? { type: 'error', message: made
+                ? `Đã rút gọn ${made} link, còn ${missed} chưa được: ${data.tiny_error}`
+                : `Chưa rút gọn được: ${data.tiny_error}` }
+            : { type: 'ok', message: `Đã rút gọn ${made} link.` };
     } catch (error) {
         flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không rút gọn được.' };
     } finally {
@@ -260,7 +264,15 @@ async function addEntry() {
             key: newKey.value.trim() || undefined,
             value: newValue.value.trim(),
         });
-        flash.value = { type: 'ok', message: `Đã thêm ${data.data.key}.` };
+        /*
+         * The entry saved either way -- the tiny link is minted after the KV
+         * write and must not undo it. But silence made a refusal look like a
+         * row waiting to be shortened, and pressing Rút gọn only repeated a
+         * call that had already failed.
+         */
+        flash.value = data.tiny_error
+            ? { type: 'error', message: `Đã thêm ${data.data.key}, nhưng chưa rút gọn được: ${data.tiny_error}` }
+            : { type: 'ok', message: `Đã thêm ${data.data.key}.` };
         newKey.value = '';
         newValue.value = '';
         page.value = 1;

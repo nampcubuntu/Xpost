@@ -316,11 +316,19 @@ class LinkController extends Controller
          * not undo an entry that was saved correctly. The row simply comes back
          * without a tiny link, and the button on the page mints it later.
          */
-        return response()->json(['data' => [
-            'key' => $key,
-            'value' => $value,
-            'tiny_url' => $this->tinyFor($key),
-        ]], 201);
+        $tiny = $this->tinyFor($key);
+
+        return response()->json([
+            'data' => [
+                'key' => $key,
+                'value' => $value,
+                'tiny_url' => $tiny,
+            ],
+            // Why there is no tiny link, when there is none. Without it the
+            // row showed a Rút gọn button that had already failed and would
+            // fail again on every press.
+            'tiny_error' => $tiny === null ? $this->tiny->lastError() : null,
+        ], 201);
     }
 
     /** The TinyURL for a key's short link, if shortening is switched on. */
@@ -377,7 +385,10 @@ class LinkController extends Controller
             $result[$key] = $tiny[$domain->url($key)] ?? null;
         }
 
-        return response()->json(['data' => $result]);
+        return response()->json([
+            'data' => $result,
+            'tiny_error' => in_array(null, $result, true) ? $this->tiny->lastError() : null,
+        ]);
     }
 
     /**

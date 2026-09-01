@@ -20,6 +20,7 @@ PHP="${PHP:-./.tools/php85/php.exe}"
 DISTRO="${WSL_DISTRO:-Ubuntu-Redis}"
 CLOUDFLARED="${CLOUDFLARED:-C:/Program Files (x86)/cloudflared/cloudflared.exe}"
 TUNNEL="${TUNNEL_NAME:-xpost-dev}"
+CF_CONFIG="${CF_CONFIG:-D:/Xpost/bin/cloudflared.yml}"
 PORT="${PORT:-8000}"
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -131,7 +132,9 @@ say "Cloudflare tunnel"
 if running cloudflared.exe "tunnel run"; then
     skip "cloudflared đã chạy"
 else
-    spawn "$CLOUDFLARED" "'tunnel','run','--url','http://127.0.0.1:$PORT','$TUNNEL'"
+    # --config, not --url: the socket and the app live on different ports, and
+    # --url is a single destination that overrides every ingress rule.
+    spawn "$CLOUDFLARED" "'tunnel','--config','$CF_CONFIG','run','$TUNNEL'"
     sleep 4
     ok "cloudflared → $TUNNEL"
 fi

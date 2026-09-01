@@ -1,5 +1,6 @@
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
+import { ref } from 'vue';
 
 /**
  * The websocket connection, made once and shared.
@@ -9,12 +10,26 @@ import Pusher from 'pusher-js';
  * nobody is watching is a connection and an auth request for nothing.
  *
  * Returns null when no key is configured, which is the case on any install
- * that has not set Reverb up. Every caller has to handle that -- the pages that
- * use this keep polling as their fallback, so a missing or stopped Reverb
- * degrades to "a few seconds late" rather than to "never updates".
+ * that has not set Reverb up.
  */
 let echo = null;
 let attempted = false;
+
+/**
+ * What the socket is currently doing, for pages that no longer poll.
+ *
+ * One of pusher-js's own states: initialized, connecting, connected,
+ * unavailable, failed, disconnected. 'unconfigured' is ours, for an install
+ * with no key at all.
+ *
+ * It exists because dropping the fallback poll makes this the difference
+ * between "nothing has happened" and "nothing can reach you". A page that
+ * cannot tell those apart shows a frozen counter and calls it calm.
+ */
+export const socketState = ref('initialized');
+
+/** True once the socket has ever delivered, so a page can trust it. */
+export const socketReady = ref(false);
 
 export function useEcho() {
     if (attempted) {
@@ -26,6 +41,8 @@ export function useEcho() {
     const key = import.meta.env.VITE_REVERB_APP_KEY;
 
     if (! key) {
+        socketState.value = 'unconfigured';
+
         return null;
     }
 
@@ -56,10 +73,24 @@ export function useEcho() {
             authEndpoint: '/broadcasting/auth',
             withCredentials: true,
         });
+        /*
+         * Watched rather than assumed.
+         *
+         * Behind a tunnel that only forwards the app's port, the socket path
+         * reaches the SPA's catch-all and gets HTML back instead of an upgrade
+         * -- measured as a 502 on a real handshake. Nothing throws; the
+         * connection simply never becomes 'connected'. So the state is
+         * published and the pages that depend on it say so.
+         */
+        echo.connector.pusher.connection.bind('state_change', ({ current }) => {
+            socketState.value = current;
+            socketReady.value = socketReady.value || current === 'connected';
+        });
     } catch {
         // A broadcaster that will not start is not a reason for the page not
-        // to. Whoever asked for it falls back to polling.
+        // to start.
         echo = null;
+        socketState.value = 'failed';
     }
 
     return echo;

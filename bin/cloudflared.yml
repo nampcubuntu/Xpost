@@ -1,0 +1,28 @@
+# Tunnel ingress, so the websocket has somewhere to land.
+#
+# The tunnel used to be started as `tunnel run --url http://127.0.0.1:8000`,
+# which is a single destination: everything went to the app. Reverb listens on
+# 8080, so `wss://dev.zenomedia.co/app/<key>` reached the SPA's catch-all route
+# and got HTML back instead of an upgrade -- measured as HTTP 200 text/html on a
+# plain GET and 502 on a real handshake. Nothing errored anywhere; the socket
+# simply never connected, and the page fell back to polling every five seconds.
+#
+# `--url` on the command line overrides these rules, so bin/dev-start.sh passes
+# --config and drops --url.
+#
+# Paths are matched in order. `^/app/` is the Pusher protocol's socket path and
+# is not the SPA's /apps page: that has no slash after "app", so it falls
+# through to the app like everything else.
+tunnel: 80a3f824-41ac-4c81-b5e5-99f410a018bc
+credentials-file: C:\Users\nambe\.cloudflared\80a3f824-41ac-4c81-b5e5-99f410a018bc.json
+
+ingress:
+  - hostname: dev.zenomedia.co
+    path: ^/app/
+    service: http://127.0.0.1:8080
+
+  - hostname: dev.zenomedia.co
+    service: http://127.0.0.1:8000
+
+  # cloudflared refuses a config whose last rule is not a catch-all.
+  - service: http_status:404

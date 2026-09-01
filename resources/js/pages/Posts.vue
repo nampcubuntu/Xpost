@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../lib/api';
 import { useAuthStore } from '../stores/auth';
-import { listen } from '../lib/echo';
+import { listen, socketState } from '../lib/echo';
 import NavIcon from '../components/NavIcon.vue';
 import PhonePreview from '../components/PhonePreview.vue';
 
@@ -236,10 +236,7 @@ onMounted(() => {
     const teamId = auth.user?.current_team_id;
 
     if (teamId) {
-        stopListening = listen(`team.${teamId}`, '.post.progress', (payload) => {
-            socketLive.value = true;
-            receiveProgress(payload);
-        });
+        stopListening = listen(`team.${teamId}`, '.post.progress', receiveProgress);
     }
 });
 
@@ -356,50 +353,57 @@ async function load(silent = false) {
 }
 
 /*
- * Live status without reloading.
+ * Live status without reloading, and without asking every five seconds.
  *
  * Not webhooks: nothing here is waiting on X. The counter in this column is
  * Xpost's own fan-out -- it moves when a queue worker finishes a target, and X
  * is never told and never tells. X's webhooks carry inbound events on an
  * account, which is a different subject entirely.
  *
- * Not a stream either. `php artisan serve` handles one request at a time, so a
- * single open EventSource would freeze the whole app, and under PHP-FPM it
- * holds a worker per tab. Reverb would be the real answer to that, and it is a
- * second daemon to start, expose and keep alive -- worth it when a publish run
- * takes an hour, not for a page that is right the moment it loads.
+ * Reverb carries it now, so the five second poll is gone. It was the fallback
+ * for not having a socket, and keeping it beside one is asking a question whose
+ * answer has already been pushed -- twelve requests a minute per open tab, per
+ * operator, for a page that is told the moment anything moves.
  *
- * So: ask again, but only while there is an answer that can change.
- */
-const REFRESH_MS = 5000;
-
-/*
- * Backed off hard while the socket is delivering.
- *
- * Not switched off: a websocket that has quietly stopped looks exactly like one
- * with nothing to say, and the first sign either way would be a counter frozen
- * at 40%. A slow poll is the check that the socket is still telling the truth,
- * and it costs one request a minute during a run.
+ * What is left is one request a minute while a run is going, and only while the
+ * socket is actually connected: a websocket that has quietly stopped looks
+ * exactly like one with nothing to say, and the first sign either way would be
+ * a counter frozen at 40%.
  */
 const SOCKET_REFRESH_MS = 60000;
 
 let refreshTimer;
-const socketLive = ref(false);
 
 /** Posts with work still to do. Nothing else can change on its own. */
 const inFlight = computed(() => posts.value.some((post) => ['scheduled', 'publishing'].includes(post.status)
     || (post.progress?.pending ?? 0) > 0));
 
+/*
+ * The socket is not connected and there is a run that should be moving.
+ *
+ * Said out loud rather than quietly polled around. With the fallback gone this
+ * is the state where the column stops being true, and an operator watching a
+ * bar sit at 40% deserves to know the difference between a stalled queue and a
+ * page that is no longer being told anything.
+ */
+const liveBroken = computed(() => inFlight.value && socketState.value !== 'connected');
+
 function scheduleRefresh() {
     clearTimeout(refreshTimer);
 
-    // A hidden tab is not being read, and every request costs a full trip to
-    // the edge. It catches up on focus instead.
-    if (! inFlight.value || document.hidden) {
+    /*
+     * A hidden tab is not being read, and every request costs a full trip to
+     * the edge. It catches up on focus instead.
+     *
+     * Nothing is scheduled while the socket is down either: that is what the
+     * banner is for. A page that keeps quietly asking is a page that hides the
+     * outage it is working around.
+     */
+    if (! inFlight.value || document.hidden || socketState.value !== 'connected') {
         return;
     }
 
-    refreshTimer = setTimeout(() => load(true), socketLive.value ? SOCKET_REFRESH_MS : REFRESH_MS);
+    refreshTimer = setTimeout(() => load(true), SOCKET_REFRESH_MS);
 }
 
 /**
@@ -582,12 +586,12 @@ const destinationHost = (url) => {
                         a settled list would be a claim that quietly stops being
                         true, and nobody would know which state they were in.
                     -->
-                    <span v-if="inFlight" class="inline-flex items-center gap-1.5 text-[12px] text-green-700">
+                    <span v-if="inFlight && !liveBroken" class="inline-flex items-center gap-1.5 text-[12px] text-green-700">
                         <span class="relative flex h-1.5 w-1.5">
                             <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-500 opacity-75"></span>
                             <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-green-600"></span>
                         </span>
-                        {{ socketLive ? 'Cập nhật tức thì' : 'Đang tự cập nhật' }}
+                        Cập nhật tức thì
                     </span>
                 </p>
             </div>
@@ -711,6 +715,31 @@ const destinationHost = (url) => {
             Cần đăng ngay thì nâng trần ở góc trên.
         </div>
 
+        <!--
+            The socket is the only thing telling this column anything now.
+
+            With the five second poll gone there is no quiet fallback left, so a
+            socket that cannot connect has to be visible: an operator watching a
+            bar sit at 40% would otherwise have no way to tell a stalled queue
+            from a page nobody is talking to. Only while a run is going, because
+            a settled list has nothing to be late about.
+        -->
+        <div
+            v-if="liveBroken"
+            class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"
+        >
+            <strong class="font-semibold">Cập nhật trực tiếp đang không hoạt động.</strong>
+            Trạng thái bên dưới là của lần tải gần nhất và sẽ không tự đổi nữa.
+            <span class="mt-1 block">
+                Reverb chưa kết nối được ({{ socketState }}). Kiểm tra
+                <code class="rounded bg-amber-100 px-1 py-0.5 font-mono">php artisan reverb:start</code>,
+                và nếu vào qua tên miền thì tunnel phải chuyển tiếp cả đường
+                <code class="rounded bg-amber-100 px-1 py-0.5 font-mono">/app/</code> sang cổng 8080.
+            </span>
+            <button class="mt-2 rounded border border-amber-400 px-2 py-1 text-[12.5px] transition hover:bg-amber-100" @click="load(true)">
+                Tải lại danh sách
+            </button>
+        </div>
         <div
             v-if="schedulerDown"
             class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"

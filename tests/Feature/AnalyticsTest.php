@@ -519,6 +519,27 @@ class AnalyticsTest extends TestCase
         }
     }
 
+    #[Test]
+    public function a_deleted_post_still_shows_the_text_that_was_published(): void
+    {
+        /*
+         * Deleting a post in Xpost does not unpublish the tweet. It is still on
+         * X, still gathering impressions, and still the row being looked at --
+         * so hiding its text leaves a table of dashes.
+         *
+         * Every one of the five posts with metrics on this install is deleted,
+         * which is exactly how the whole content column came to read "—".
+         */
+        $post = Post::factory()->for($this->team)->create(['body' => 'nội dung đã đăng']);
+        $post->delete();
+
+        $found = Post::withTrashed()->whereKey($post->id)->first();
+
+        $this->assertNotNull($found, 'a deleted post cannot be resolved for the table');
+        $this->assertSame('nội dung đã đăng', $found->body);
+        $this->assertNotNull($found->deleted_at, 'the row cannot say the post is gone');
+    }
+
     /** Run a closure with a given team in context. */
     private function asTeam(int $teamId, callable $callback): mixed
     {

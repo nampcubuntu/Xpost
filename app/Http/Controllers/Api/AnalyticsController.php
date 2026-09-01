@@ -120,17 +120,31 @@ class AnalyticsController extends Controller
             ->whereKey(array_column($rows, 'account_id'))
             ->pluck('username', 'id');
 
-        $posts = Post::query()
+        /*
+         * Deleted posts included on purpose.
+         *
+         * Deleting a post here does not unpublish the tweet -- it is still
+         * on X, still gathering impressions, and still the row being looked
+         * at. Every one of the five posts with metrics on this install is
+         * soft-deleted, so the whole content column read as a dash.
+         */
+        $posts = Post::withTrashed()
             ->whereKey(array_column($rows, 'post_id'))
-            ->pluck('body', 'id');
+            ->get(['id', 'body', 'deleted_at'])
+            ->keyBy('id');
 
         return response()->json([
             'data' => array_map(static function (array $row) use ($accounts, $posts): array {
-                $body = (string) ($posts[$row['post_id']] ?? '');
+                $post = $posts[$row['post_id']] ?? null;
+                $body = (string) ($post->body ?? '');
 
                 return $row + [
                     'username' => $accounts[$row['account_id']] ?? null,
                     'excerpt' => mb_strlen($body) > 90 ? mb_substr($body, 0, 90).'…' : $body,
+                    // Said rather than implied: the tweet is live, the post
+                    // record here is not, and that is why this row exists
+                    // while the tile beside the chart does not count it.
+                    'post_deleted' => $post?->deleted_at !== null,
                 ];
             }, $rows),
         ]);

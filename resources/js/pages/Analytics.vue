@@ -67,6 +67,18 @@ function pick(days) {
     from.value = start.toISOString().slice(0, 10);
 }
 
+/** Which preset the two dates currently describe, if any. */
+const activeRange = computed(() => {
+    const today = new Date().toISOString().slice(0, 10);
+
+    if (to.value !== today) {
+        return null;
+    }
+
+    return ranges.find((r) => from.value
+        === new Date(Date.now() - r.days * 86400000).toISOString().slice(0, 10))?.days ?? null;
+});
+
 watch([from, to], load);
 
 const engagement = computed(() => overview.value?.engagement ?? {});
@@ -145,11 +157,16 @@ const retries = computed(() => volumeDays.value.reduce(
     0,
 ));
 
-const measured = (value) => (value
-    ? new Date(value.replace(' ', 'T')).toLocaleString('vi-VN', {
-        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-    })
-    : '—');
+const measured = (value) => {
+    if (! value) {
+        return '—';
+    }
+
+    const at = new Date(value.replace(' ', 'T'));
+    const pad = (v) => String(v).padStart(2, '0');
+
+    return `${pad(at.getDate())}/${pad(at.getMonth() + 1)} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+};
 </script>
 
 <template>
@@ -167,7 +184,10 @@ const measured = (value) => (value
                     <button
                         v-for="r in ranges"
                         :key="r.label"
-                        class="px-2.5 py-1.5 text-[12.5px] transition hover:bg-neutral-50"
+                        class="px-2.5 py-1.5 text-[12.5px] transition"
+                        :class="activeRange === r.days
+                            ? 'bg-neutral-900 font-medium text-white'
+                            : 'hover:bg-neutral-50'"
                         @click="pick(r.days)"
                     >{{ r.label }}</button>
                 </div>
@@ -301,27 +321,19 @@ const measured = (value) => (value
                 </div>
             </div>
 
+            <!--
+                Two scales, because one cannot hold both.
+
+                On this install the range holds 28 published against 914 failed.
+                Sharing an axis pins the published series flat against the floor
+                -- the series someone opened the page to see, drawn as a line of
+                nothing. Separate charts cost a comparison that was meaningless
+                at 30:1 anyway, and buy back the shape of each.
+            -->
             <div class="xp-card mb-5 p-5">
-                <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-                    <h2 class="text-[15px] font-semibold">Lượng bài đăng theo ngày</h2>
+                <h2 class="text-[15px] font-semibold">Lượng bài đăng theo ngày</h2>
 
-                    <div class="flex gap-4 text-[11.5px] text-neutral-500">
-                        <span v-for="s in volumeSeries" :key="s.key" class="flex items-center gap-1.5">
-                            <span class="h-2 w-2 rounded-sm" :style="{ background: s.color }"></span>
-                            {{ s.label }}
-                        </span>
-                    </div>
-                </div>
-
-                <!--
-                    Destinations, not attempts.
-
-                    A target that failed twice and then landed is one post
-                    delivered, and the events table holds three rows for it.
-                    Counting rows made this chart read fifty where the tile
-                    beside it read twenty-eight.
-                -->
-                <p class="mb-3 text-[11.5px] text-neutral-500">
+                <p class="mb-4 text-[11.5px] text-neutral-500">
                     Đếm theo đích đến, không phải lượt gọi API.
                     <template v-if="retries > 0">
                         Có {{ n(retries) }} lượt thử lại không hiện ở đây.
@@ -331,14 +343,29 @@ const measured = (value) => (value
                     </template>
                 </p>
 
-                <TrendChart
-                    v-if="volumeDays.length"
-                    :series="volumeSeries"
-                    :labels="chartDays"
-                    kind="bars"
-                    :height="160"
-                />
-                <p v-else class="py-8 text-center text-[13px] text-neutral-500">Chưa có dữ liệu trong khoảng này.</p>
+                <div class="grid gap-5 lg:grid-cols-2">
+                    <div v-for="s in volumeSeries" :key="s.key">
+                        <p class="mb-1 flex items-baseline gap-2">
+                            <span class="h-2 w-2 shrink-0 rounded-sm" :style="{ background: s.color }"></span>
+                            <span class="text-[12.5px] font-medium">{{ s.label }}</span>
+                            <span class="text-[12.5px] tabular-nums text-neutral-500">
+                                {{ n(s.values.reduce((a, b) => a + b, 0)) }}
+                            </span>
+                        </p>
+
+                        <TrendChart
+                            v-if="volumeDays.length"
+                            :series="[s]"
+                            :labels="chartDays"
+                            kind="bars"
+                            :height="130"
+                        />
+                    </div>
+                </div>
+
+                <p v-if="!volumeDays.length" class="py-8 text-center text-[13px] text-neutral-500">
+                    Chưa có dữ liệu trong khoảng này.
+                </p>
             </div>
 
             <!--
@@ -391,7 +418,12 @@ const measured = (value) => (value
                                         class="text-blue-600 hover:underline"
                                     >@{{ row.username ?? '—' }}</a>
                                 </td>
-                                <td class="max-w-[280px] truncate px-4 py-2.5 text-neutral-600" :title="row.excerpt">{{ row.excerpt || '—' }}</td>
+                                <td class="max-w-[280px] px-4 py-2.5 text-neutral-600" :title="row.excerpt">
+                                    <span class="block truncate">{{ row.excerpt || '—' }}</span>
+                                    <span v-if="row.post_deleted" class="text-[11px] text-neutral-400">
+                                        bài đã xoá ở Xpost, tweet vẫn còn trên X
+                                    </span>
+                                </td>
                                 <td class="px-4 py-2.5 text-right font-medium tabular-nums">{{ n(row.impressions) }}</td>
                                 <td class="px-4 py-2.5 text-right tabular-nums">{{ n(row.engagements) }}</td>
                                 <td class="px-4 py-2.5 text-right tabular-nums" :class="Number(row.engagement_rate) > 0 ? 'text-neutral-900' : 'text-neutral-400'">

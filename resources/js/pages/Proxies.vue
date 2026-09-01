@@ -38,6 +38,49 @@ const selected = ref(new Set());
  * fifty rows looks like a click that did nothing.
  */
 const pending = computed(() => proxies.value.filter((proxy) => proxy.check_queued_at));
+
+/*
+ * A verdict is only as good as the day it was reached.
+ *
+ * "healthy" was shown as a plain fact whatever its age, and last_checked_at was
+ * already in the payload and never rendered. A proxy checked five days ago read
+ * exactly like one checked a minute ago -- which is how a supplier's line can
+ * start answering 407, keep its green badge, and take every post assigned to it
+ * down with it.
+ */
+const STALE_AFTER_HOURS = 24;
+
+function verdictAgeHours(proxy) {
+    return proxy.last_checked_at
+        ? (Date.now() - new Date(proxy.last_checked_at).getTime()) / 3600000
+        : null;
+}
+
+const isStale = (proxy) => {
+    const hours = verdictAgeHours(proxy);
+
+    return hours === null || hours > STALE_AFTER_HOURS;
+};
+
+/** Short enough to sit under a badge without pushing the row taller. */
+function verdictAge(proxy) {
+    const hours = verdictAgeHours(proxy);
+
+    if (hours === null) {
+        return 'chưa kiểm tra';
+    }
+
+    if (hours < 1) {
+        return `${Math.max(1, Math.round(hours * 60))} phút trước`;
+    }
+
+    return hours < 48 ? `${Math.round(hours)} giờ trước` : `${Math.round(hours / 24)} ngày trước`;
+}
+
+/** How many rows on this page are showing a verdict nobody should trust. */
+const staleCount = computed(() => proxies.value.filter(
+    (proxy) => ! proxy.check_queued_at && proxy.health_status === 'healthy' && isStale(proxy)
+).length);
 const allSelected = computed(() => proxies.value.length > 0 && selected.value.size === proxies.value.length);
 
 const blank = () => ({
@@ -309,6 +352,24 @@ async function assignPicked() {
     }
 }
 
+/*
+ * Re-check everything on this page.
+ *
+ * The per-row button exists, but the state worth acting on is "these nine
+ * verdicts are five days old", and clicking nine times is how that gets left
+ * alone until a campaign fails.
+ */
+async function checkStale() {
+    busy.value = true;
+
+    try {
+        await api.post('proxies/check', { ids: proxies.value.map((proxy) => proxy.id) });
+        await load();
+        pollWhilePending();
+    } finally {
+        busy.value = false;
+    }
+}
 async function checkSelected() {
     busy.value = true;
 
@@ -645,6 +706,25 @@ async function remove(proxy) {
         </form>
 
         <!--
+            Said before a campaign says it.
+
+            A proxy that has started refusing keeps its green badge until
+            something asks it again, and the thing that usually asks is a
+            publish run -- which then fails for every account behind it.
+        -->
+        <div
+            v-if="staleCount"
+            class="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-[13px] text-amber-900"
+        >
+            <strong class="font-semibold">{{ staleCount }} proxy đang hiện "healthy" từ hơn 24 giờ trước.</strong>
+            <span>Kết quả cũ không nói được proxy còn dùng được hay không — bài đăng sẽ là thứ phát hiện ra.</span>
+            <button
+                class="ml-auto rounded border border-amber-400 px-2 py-1 text-[12.5px] transition hover:bg-amber-100 disabled:opacity-50"
+                :disabled="busy"
+                @click="checkStale"
+            >Kiểm tra lại trang này</button>
+        </div>
+        <!--
             Filtered on the server, so this searches the pool rather than the
             page -- which is the only version of the question worth asking once
             a supplier has delivered two thousand of them.
@@ -960,9 +1040,21 @@ async function remove(proxy) {
                             <span v-if="proxy.check_queued_at" class="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
                                 đang kiểm tra…
                             </span>
-                            <span v-else class="rounded-full px-2 py-0.5 text-xs font-medium" :class="healthClass[proxy.health_status]">
-                                {{ proxy.health_status }}
-                            </span>
+                            <template v-else>
+                                <span
+                                    class="rounded-full px-2 py-0.5 text-xs font-medium"
+                                    :class="isStale(proxy) ? 'bg-neutral-100 text-neutral-500' : healthClass[proxy.health_status]"
+                                >{{ proxy.health_status }}</span>
+
+                                <!--
+                                    The age, always. A badge with no date is a
+                                    claim about now made from whenever.
+                                -->
+                                <p
+                                    class="mt-0.5 text-[11px]"
+                                    :class="isStale(proxy) ? 'text-amber-700' : 'text-neutral-400'"
+                                >{{ verdictAge(proxy) }}</p>
+                            </template>
                         </td>
                         <td class="px-4 py-3 text-neutral-600">{{ proxy.latency_ms ? `${proxy.latency_ms} ms` : '—' }}</td>
                         <td class="px-4 py-3 text-neutral-600">{{ proxy.assigned_count }}/{{ proxy.max_accounts }}</td>

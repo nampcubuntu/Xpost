@@ -370,4 +370,31 @@ class ShadowbanCheckTest extends TestCase
         $this->assertFalse($result['detail']['protected']);
         $this->assertFalse($result['detail']['sensitive']);
     }
+
+    #[Test]
+    public function the_tiles_add_up_to_the_number_of_accounts(): void
+    {
+        /*
+         * They did not. pluck turns a null column into an empty-string key, so
+         * get('') and get(null) resolved to the same entry and adding them
+         * reported 2,046 unchecked accounts out of 1,026 -- a number larger
+         * than the pool, sitting on the page as a fact.
+         */
+        $this->fake([['username' => 'a', 'protected' => false, 'tweets_count' => 40]], 5);
+
+        $checked = $this->account('checked');
+        $this->account('never_checked_1');
+        $this->account('never_checked_2');
+
+        (new CheckAccountVisibility($checked->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+
+        $body = $this->actingAs($this->user->refresh())
+            ->getJson('/api/v1/accounts/visibility/stats')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(3, $body['total']);
+        $this->assertSame(2, $body['by_state']['unchecked']);
+        $this->assertSame(3, array_sum($body['by_state']), 'the tiles do not add up to the pool');
+    }
 }

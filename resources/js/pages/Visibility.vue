@@ -381,8 +381,11 @@ const checkedAt = (iso) => (iso
                                 <span v-if="account.visibility_detail?.search"
                                       :class="testLabel[account.visibility_detail.search]?.class">
                                     {{ testLabel[account.visibility_detail.search]?.text }}
+                                    <!-- 20 with a cursor behind it is 20+, and
+                                         the column was printing it as a total
+                                         the same way the sentence used to. -->
                                     <span v-if="account.visibility_detail.posts_found !== null" class="text-neutral-400">
-                                        ({{ account.visibility_detail.posts_found }} bài)
+                                        ({{ account.visibility_detail.posts_found }}{{ account.visibility_detail.posts_more ? '+' : '' }} bài)
                                     </span>
                                 </span>
                                 <span v-else class="text-neutral-300">—</span>

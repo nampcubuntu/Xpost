@@ -347,16 +347,28 @@ class AccountController extends Controller
             ->groupBy('visibility_state')
             ->pluck('aggregate', 'visibility_state');
 
+        $known = ['ok', 'restricted', 'protected', 'unknown'];
+
+        $counts = [];
+
+        foreach ($known as $state) {
+            $counts[$state] = (int) $byState->get($state, 0);
+        }
+
+        /*
+         * Never asked, counted as what is left rather than by key.
+         *
+         * pluck turns a null column into an empty-string key, so get('') and
+         * get(null) both resolve to the same entry -- and adding them reported
+         * 2,046 unchecked accounts out of 1,026. Subtracting from the total
+         * cannot double count whatever the driver decides to call null.
+         */
+        $counts['unchecked'] = max(0, (int) $byState->sum() - array_sum($counts));
+
         return response()->json([
             'configured' => $checker->isConfigured(),
-            'by_state' => [
-                'ok' => (int) $byState->get('ok', 0),
-                'restricted' => (int) $byState->get('restricted', 0),
-                'protected' => (int) $byState->get('protected', 0),
-                'unknown' => (int) $byState->get('unknown', 0),
-                // Never asked, which is not the same as asked and unclear.
-                'unchecked' => (int) $byState->get('', 0) + (int) $byState->get(null, 0),
-            ],
+            'total' => (int) $byState->sum(),
+            'by_state' => $counts,
         ]);
     }
 

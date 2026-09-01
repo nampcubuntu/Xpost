@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import api from '../lib/api';
+import api, { validationErrors } from '../lib/api';
+import NavIcon from '../components/NavIcon.vue';
 import TimezoneSelect from '../components/TimezoneSelect.vue';
 
 const accounts = ref([]);
@@ -100,6 +101,70 @@ function toggle(id) {
     selected.value = new Set(selected.value);
 }
 
+/*
+ * Naming the groups, not just picking one.
+ *
+ * The bulk bar could put accounts into a group and there was nowhere to make
+ * one -- the endpoints existed and nothing on any page reached them, so the
+ * dropdown was empty on every install that had not seeded a group by hand.
+ *
+ * Same shape as the proxy page's, because it is the same job and two pages
+ * solving it two ways is how the second one ends up unlearned.
+ */
+const managing = ref(false);
+const newGroup = reactive({ name: '', color: '#1d9bf0' });
+
+async function loadGroups() {
+    const { data } = await api.get('account-groups');
+
+    groups.value = data.data;
+}
+
+async function createGroup() {
+    if (! newGroup.name.trim()) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        await api.post('account-groups', { name: newGroup.name.trim(), color: newGroup.color });
+        newGroup.name = '';
+        await loadGroups();
+    } catch (error) {
+        // The one that actually happens: a second person naming a batch that
+        // already has a name.
+        window.alert(validationErrors(error).name ?? 'Không tạo được nhóm.');
+    } finally {
+        busy.value = false;
+    }
+}
+
+async function renameGroup(row) {
+    const name = window.prompt('Tên nhóm', row.name)?.trim();
+
+    if (! name || name === row.name) {
+        return;
+    }
+
+    try {
+        await api.put(`account-groups/${row.id}`, { name });
+        await loadGroups();
+    } catch (error) {
+        window.alert(validationErrors(error).name ?? 'Không đổi tên được.');
+    }
+}
+
+/** The name goes; the accounts stay. Said out loud, because "Xoá" on a row
+ *  reading "412 tài khoản" looks like it takes them with it. */
+async function deleteGroup(row) {
+    if (! window.confirm(`Xoá nhóm "${row.name}"?\n\n${row.accounts_count ?? 0} tài khoản trong nhóm vẫn được giữ nguyên, chỉ mất nhãn nhóm.`)) {
+        return;
+    }
+
+    await api.delete(`account-groups/${row.id}`);
+    await loadGroups();
+}
 async function runBulk(action, extra = {}) {
     if (!selected.value.size) {
         return;
@@ -428,17 +493,65 @@ async function connectAccount(flow) {
                 <option value="error">Lỗi</option>
             </select>
 
-            <template v-if="selected.size">
-                <span class="ml-2 text-[13px] text-neutral-600">Đã chọn {{ selected.size }}</span>
-                <button class="xp-btn-ghost" :disabled="busy" @click="runBulk('enable')">Bật</button>
-                <button class="xp-btn-ghost" :disabled="busy" @click="runBulk('disable')">Tắt</button>
-                <button class="xp-btn-ghost" :disabled="busy" @click="runBulk('refresh_token')">Làm mới token</button>
+            <!--
+                A button, at the height of the fields beside it, and the only
+                way to make a group at all: the endpoints existed and no page
+                reached them, so the dropdown below was empty on every install
+                that had not seeded one by hand.
+            -->
+            <button
+                class="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-[13px] text-neutral-600 transition hover:border-neutral-400 hover:bg-neutral-50"
+                @click="managing = true"
+            >
+                <NavIcon name="apps" :size="13" class="text-neutral-400" />
+                Quản lý nhóm
+            </button>
+        </div>
+
+        <!--
+            The actions, on their own bar.
+
+            Seven controls used to be appended to the filter row the moment
+            something was ticked, so "which accounts am I looking at" and "what
+            am I about to do to fifty of them" shared one line of flat ghost
+            buttons. Only present when there is a selection, the same way the
+            proxy page does it.
+        -->
+        <div
+            v-if="selected.size"
+            class="mb-3 flex flex-wrap items-center gap-3 rounded-lg bg-neutral-900 px-4 py-2.5 text-[13px] text-white"
+        >
+            <span class="font-medium">Đã chọn {{ selected.size }}</span>
+
+            <div class="flex flex-wrap items-center gap-1.5">
+                <button
+                    class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
+                    :disabled="busy"
+                    @click="runBulk('enable')"
+                >Bật</button>
+                <button
+                    class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
+                    :disabled="busy"
+                    @click="runBulk('disable')"
+                >Tắt</button>
+                <button
+                    class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
+                    :disabled="busy"
+                    @click="runBulk('refresh_token')"
+                >Làm mới token</button>
+
                 <select
-                    class="xp-field max-w-[170px]"
-                    @change="$event.target.value && runBulk('assign_group', { group_id: Number($event.target.value) })"
+                    class="rounded-md border-0 bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/20 focus:ring-1 focus:ring-white/40 disabled:opacity-40"
+                    :disabled="busy || !groups.length"
+                    :value="''"
+                    @change="$event.target.value && runBulk('assign_group', { group_id: Number($event.target.value) }); $event.target.value = ''"
                 >
-                    <option value="">Thêm vào nhóm…</option>
-                    <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+                    <option value="" class="text-neutral-900">
+                        {{ groups.length ? 'Thêm vào nhóm…' : 'Chưa có nhóm nào' }}
+                    </option>
+                    <option v-for="group in groups" :key="group.id" :value="group.id" class="text-neutral-900">
+                        {{ group.name }}
+                    </option>
                 </select>
 
                 <!--
@@ -451,7 +564,7 @@ async function connectAccount(flow) {
                     have to sit on a particular exit.
                 -->
                 <select
-                    class="xp-field max-w-[220px]"
+                    class="max-w-[240px] rounded-md border-0 bg-white/10 px-2 py-1 text-[13px] text-white transition hover:bg-white/20 focus:ring-1 focus:ring-white/40 disabled:opacity-40"
                     :disabled="busy"
                     @change="onProxyPick($event.target)"
                 >
@@ -481,14 +594,69 @@ async function connectAccount(flow) {
                 />
 
                 <button
-                    class="xp-btn-ghost"
+                    class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
                     :disabled="busy"
                     title="Suy ra từ mục Location trên hồ sơ X, sau đó tới quốc gia của proxy. Không ghi đè múi giờ đã đặt tay."
                     @click="runBulk('guess_timezone')"
                 >Tự đoán múi giờ</button>
-            </template>
+            </div>
+
+            <button class="ml-auto text-white/60 transition hover:text-white" @click="selected = new Set()">Bỏ chọn</button>
         </div>
 
+        <!--
+            Creating the names themselves.
+
+            A dialog rather than a page: a group is a name and a colour, and a
+            whole route for two fields would be heavier than the thing it
+            manages.
+        -->
+        <div v-if="managing" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="managing = false">
+            <div class="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-xl">
+                <div class="border-b border-neutral-200 px-5 py-4">
+                    <h2 class="text-[15px] font-semibold">Nhóm tài khoản</h2>
+                    <p class="mt-0.5 text-[12.5px] text-neutral-500">
+                        Đặt tên cho từng tệp tài khoản — theo thị trường, theo chiến dịch, hay theo lô mua.
+                        Một tài khoản có thể thuộc nhiều nhóm.
+                    </p>
+                </div>
+
+                <form class="flex items-center gap-2 border-b border-neutral-200 px-5 py-3" @submit.prevent="createGroup">
+                    <input
+                        v-model="newGroup.name"
+                        class="xp-field flex-1 py-1.5 text-[13px]"
+                        placeholder="Tên nhóm mới…"
+                        maxlength="255"
+                    >
+                    <input v-model="newGroup.color" type="color" class="h-8 w-10 cursor-pointer rounded border border-neutral-200">
+                    <button type="submit" class="xp-btn-primary py-1.5 text-[13px]" :disabled="busy || !newGroup.name.trim()">
+                        Tạo
+                    </button>
+                </form>
+
+                <div class="min-h-0 flex-1 overflow-y-auto">
+                    <p v-if="!groups.length" class="px-5 py-8 text-center text-[13px] text-neutral-500">
+                        Chưa có nhóm nào.
+                    </p>
+
+                    <div
+                        v-for="row in groups"
+                        :key="row.id"
+                        class="flex items-center gap-3 border-b border-neutral-100 px-5 py-2.5 text-[13px] last:border-b-0"
+                    >
+                        <span class="h-3 w-3 shrink-0 rounded-full" :style="{ backgroundColor: row.color }"></span>
+                        <span class="min-w-0 flex-1 truncate font-medium">{{ row.name }}</span>
+                        <span class="shrink-0 text-[12.5px] text-neutral-500">{{ row.accounts_count ?? 0 }} tài khoản</span>
+                        <button class="shrink-0 rounded-md px-2 py-1 text-[12.5px] text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-900" @click="renameGroup(row)">Đổi tên</button>
+                        <button class="shrink-0 rounded-md px-2 py-1 text-[12.5px] text-neutral-500 transition hover:bg-red-50 hover:text-red-600" @click="deleteGroup(row)">Xoá</button>
+                    </div>
+                </div>
+
+                <div class="border-t border-neutral-200 px-5 py-3 text-right">
+                    <button class="xp-btn-ghost" @click="managing = false">Đóng</button>
+                </div>
+            </div>
+        </div>
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
             <table class="w-full min-w-[720px] text-left text-[13px]">

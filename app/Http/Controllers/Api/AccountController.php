@@ -10,6 +10,7 @@ use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\XAccountResource;
 use App\Jobs\RefreshAccountToken;
+use App\Models\AccountGroup;
 use App\Models\XAccount;
 use App\Services\Proxies\ProxyAssigner;
 use App\Services\X\TimezoneGuesser;
@@ -186,6 +187,21 @@ class AccountController extends Controller
                     $affected++;
                 }
             });
+
+        /*
+         * The counter the group list renders, brought back in step.
+         *
+         * assign_group and remove_group move pivot rows, which fires nothing --
+         * only the group controller's own sync endpoint was recounting, and
+         * this is the path the accounts toolbar actually takes. Five hundred
+         * accounts went into a group and the group went on saying "0".
+         *
+         * Once after the loop rather than once per account: it is a COUNT, and
+         * a selection here can be ten thousand.
+         */
+        if (in_array($data['action'], ['assign_group', 'remove_group'], true) && ($data['group_id'] ?? null)) {
+            AccountGroup::query()->find($data['group_id'])?->syncCount();
+        }
 
         return response()->json([
             'affected' => $affected,

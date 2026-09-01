@@ -446,6 +446,48 @@ class ShadowbanCheckTest extends TestCase
     }
 
     #[Test]
+    public function a_check_that_dies_leaves_the_row_saying_so(): void
+    {
+        /*
+         * What the user actually hit: 143 jobs died, every row stayed blank,
+         * and blank is exactly what a handle looks like before it is checked.
+         * A failure was indistinguishable from waiting, so the page sat there
+         * promising a result that was never coming.
+         *
+         * A dead check has to leave a verdict behind -- "chưa rõ" plus the
+         * reason -- or nothing on screen can tell the two apart.
+         */
+        $row = $this->row();
+
+        (new CheckAccountVisibility($row->id, $this->team->id))
+            ->failed(new \RuntimeException('Sorsa từ chối: 402'));
+
+        $row->refresh();
+
+        $this->assertSame('unknown', $row->state);
+        $this->assertNotNull($row->checked_at, 'a dead check left the row looking unchecked');
+        $this->assertStringContainsString('402', $row->detail['error']);
+        // And never as a clean bill of health.
+        $this->assertSame('unknown', $row->detail['search']);
+    }
+
+    #[Test]
+    public function the_reason_a_check_died_survives_to_the_page(): void
+    {
+        // The list is what the page reads, so a reason that never leaves the
+        // database is a reason nobody sees.
+        $this->row(['state' => 'unknown', 'checked_at' => now(), 'detail' => [
+            'search' => 'unknown',
+            'error' => 'RuntimeException: Sorsa từ chối: 402',
+        ]]);
+
+        $this->actingAs($this->user->refresh())
+            ->getJson('/api/v1/visibility')
+            ->assertOk()
+            ->assertJsonPath('data.0.detail.error', 'RuntimeException: Sorsa từ chối: 402');
+    }
+
+    #[Test]
     public function another_teams_handles_are_not_listed(): void
     {
         // The list is per team: two teams watching the same handle are two

@@ -572,6 +572,16 @@ const verdictClass = {
                                         </div>
                                     </template>
                                 </div>
+
+                                <!--
+                                    Why the check could not answer, when it could not.
+
+                                    "Chưa rõ" with nothing behind it sends someone
+                                    looking at X for a problem that is on this side.
+                                -->
+                                <p v-if="row.detail?.error" class="mt-2 max-w-3xl rounded-lg bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 ring-1 ring-amber-200">
+                                    Lần kiểm tra này hỏng nên chưa có kết luận: {{ row.detail.error }}
+                                </p>
                             </td>
                         </tr>
                         </template>

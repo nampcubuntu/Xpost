@@ -11,6 +11,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\ThrottlesExceptions;
 use Illuminate\Support\Facades\Redis;
+use Throwable;
 
 /**
  * One handle's visibility, checked on the queue.
@@ -38,7 +39,13 @@ class CheckAccountVisibility implements ShouldQueue
     /** @return array<int, object> */
     public function middleware(): array
     {
-        return [new ThrottlesExceptions(5, 60)];
+        /*
+         * report() is not optional here. Without it the middleware swallows
+         * the exception and releases the job, so the only trace left is
+         * "attempted too many times" -- 143 of those in the log, not one of
+         * them naming what actually broke.
+         */
+        return [(new ThrottlesExceptions(5, 60))->report()];
     }
 
     public function handle(ShadowbanChecker $checker): void
@@ -81,6 +88,30 @@ class CheckAccountVisibility implements ShouldQueue
                      */
                     $this->release(30);
                 });
+        });
+    }
+
+    /**
+     * A check that died still has to leave the row saying something.
+     *
+     * Without this the row stays blank, and blank is what a handle looks
+     * like before it has ever been checked -- so a failure was
+     * indistinguishable from waiting, and the page sat there promising a
+     * result that was never coming.
+     */
+    public function failed(Throwable $e): void
+    {
+        TeamContext::runAs($this->teamId, function () use ($e): void {
+            VisibilityCheck::query()->whereKey($this->checkId)->update([
+                'state' => 'unknown',
+                'checked_at' => now(),
+                'detail' => json_encode([
+                    'search' => 'unknown',
+                    'search_suggestion' => 'unknown',
+                    'replies' => 'unknown',
+                    'error' => class_basename($e).': '.$e->getMessage(),
+                ]),
+            ]);
         });
     }
 }

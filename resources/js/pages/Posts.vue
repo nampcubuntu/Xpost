@@ -238,7 +238,7 @@ onMounted(() => {
     if (teamId) {
         stopListening = listen(`team.${teamId}`, '.post.progress', (payload) => {
             socketLive.value = true;
-            applyProgress(payload);
+            receiveProgress(payload);
         });
     }
 });
@@ -250,6 +250,8 @@ onUnmounted(() => {
     clearTimeout(refreshTimer);
     // And keeps patching rows it no longer renders.
     stopListening();
+    // A frame booked for a page that is being torn down.
+    cancelAnimationFrame(frame);
 });
 
 async function act(post, request, describe) {
@@ -422,9 +424,44 @@ function applyProgress(payload) {
     // The status badge reads its label from the row, and the broadcast carries
     // the value rather than the translated string.
     row.status_label = statuses.find((entry) => entry.value === payload.status)?.label ?? row.status_label;
+}
 
-    // A run that has just finished has nothing left to poll for.
+/*
+ * Messages collected and applied a frame at a time.
+ *
+ * The throttle on the server is per post, so a hundred posts going out at nine
+ * o'clock is a hundred messages a second on the team channel however few of
+ * them this page is showing. Each one arrives in its own task, so applying it
+ * where it lands is a hundred separate reactive writes and a hundred render
+ * passes a second to move a progress bar that repaints sixty times at best.
+ *
+ * Keyed by post id, so ten ticks for one post between frames collapse to the
+ * last -- which is the only one that was ever going to be true. A payload for
+ * a row this page is not showing is dropped here rather than after the frame,
+ * because at a hundred a second most of them are that.
+ */
+const queued = new Map();
+let frame = null;
+
+function flushProgress() {
+    frame = null;
+
+    queued.forEach(applyProgress);
+    queued.clear();
+
+    // Once per frame rather than once per message: it clears and re-arms a
+    // timer and re-reads a computed over the whole page of rows.
     scheduleRefresh();
+}
+
+function receiveProgress(payload) {
+    queued.set(payload.id, payload);
+
+    // requestAnimationFrame and not a timer: a hidden tab stops calling it, so
+    // a run that goes out while the operator is in another tab stops doing
+    // render work nobody can see. What arrives meanwhile coalesces into the one
+    // frame that runs when they come back.
+    frame ??= requestAnimationFrame(flushProgress);
 }
 
 /*

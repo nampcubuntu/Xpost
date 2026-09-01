@@ -238,4 +238,55 @@ class PostProgressBroadcastTest extends TestCase
         // Reaching this line without an exception is the assertion.
         $this->assertTrue(true);
     }
+
+    #[Test]
+    public function two_columns_move_together_and_the_floor_holds(): void
+    {
+        /*
+         * A target leaving pending for published moves two columns on one row,
+         * and it is now one statement rather than an increment followed by a
+         * decrement -- half the counter writes on a fan-out.
+         *
+         * The floor is the part worth pinning. These statements race by design:
+         * twenty workers finish inside the same moment, and the reconciler that
+         * runs every minute can already have recounted pending to zero. Without
+         * a guard the next target to land takes it to -1, and the list renders
+         * a campaign with minus one account left to go.
+         */
+        $post = $this->draft(['targets_total' => 2, 'targets_pending' => 0, 'targets_published' => 0]);
+        $account = XAccount::factory()->create(['team_id' => $this->team->id]);
+
+        PostTarget::factory()->create([
+            'post_id' => $post->id,
+            'team_id' => $this->team->id,
+            'x_account_id' => $account->id,
+            'status' => TargetStatus::Pending,
+        ])->forceFill(['status' => TargetStatus::Published])->save();
+
+        $post->refresh();
+
+        $this->assertSame(1, $post->targets_published);
+        $this->assertSame(0, $post->targets_pending, 'pending was already empty and must not go below it');
+    }
+
+    #[Test]
+    public function a_counter_with_room_still_comes_down(): void
+    {
+        // The other half of the guard: a floor that never lets go would leave
+        // every campaign reading as though nothing had finished.
+        $post = $this->draft(['targets_total' => 2, 'targets_pending' => 2, 'targets_published' => 0]);
+        $account = XAccount::factory()->create(['team_id' => $this->team->id]);
+
+        PostTarget::factory()->create([
+            'post_id' => $post->id,
+            'team_id' => $this->team->id,
+            'x_account_id' => $account->id,
+            'status' => TargetStatus::Pending,
+        ])->forceFill(['status' => TargetStatus::Failed])->save();
+
+        $post->refresh();
+
+        $this->assertSame(1, $post->targets_pending);
+        $this->assertSame(1, $post->targets_failed);
+    }
 }

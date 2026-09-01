@@ -2,11 +2,14 @@ import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import router, { warmRouteChunks } from './router';
 import { ensureCsrf } from './lib/api';
+import { lazyMedia } from './lib/lazy-media';
 import App from './App.vue';
 
 createApp(App)
     .use(createPinia())
     .use(router)
+    // Video in a list loads when it is scrolled near, not when the page renders.
+    .directive('lazy-media', lazyMedia)
     .mount('#app');
 
 /*

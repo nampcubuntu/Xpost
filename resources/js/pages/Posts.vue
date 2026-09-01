@@ -853,6 +853,7 @@ const destinationHost = (url) => {
                                             class="relative mt-2 aspect-video w-32 shrink-0 overflow-hidden rounded-lg border border-neutral-200 bg-neutral-100"
                                         >
                                             <video
+                                                v-lazy-media
                                                 v-if="isVideo(post.media[0])"
                                                 :src="post.media[0].url"
                                                 class="h-full w-full bg-black object-cover"

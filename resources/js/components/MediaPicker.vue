@@ -336,6 +336,7 @@ function onDrop(event) {
                     class="group/pick relative h-[100px] w-[100px] overflow-hidden rounded-lg border border-neutral-200"
                 >
                     <video
+                        v-lazy-media
                         v-if="isVideo(item)"
                         :src="posterSrc(item)"
                         preload="metadata"
@@ -485,6 +486,7 @@ function onDrop(event) {
                     @click="toggle(item)"
                 >
                     <video
+                        v-lazy-media
                         v-if="isVideo(item)"
                         :ref="(el) => setVideoEl(item.id, el)"
                         :src="posterSrc(item)"

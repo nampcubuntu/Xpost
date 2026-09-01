@@ -790,7 +790,7 @@ const destinationHost = (url) => {
                 </p>
             </div>
 
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-4">
                 <!--
                     Today's spend, next to the button that creates more of it.
 
@@ -861,9 +861,14 @@ const destinationHost = (url) => {
                         -->
                         <span
                             v-else
-                            class="text-[11px] font-medium text-amber-800"
+                            class="inline-flex items-center gap-1 text-[11px] font-medium text-amber-800"
                             title="Một lần lên lịch nhầm chạy tới hết số dư ở X."
-                        >chưa có trần</span>
+                        >
+                            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true">
+                                <path d="M8 1.5 15 14H1L8 1.5Zm0 4a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 8 5.5Zm0 6.75a.9.9 0 1 0 0-1.8.9.9 0 0 0 0 1.8Z"/>
+                            </svg>
+                            chưa giới hạn
+                        </span>
 
                         <div v-if="budget.budget_usd !== null" class="h-1 w-20 overflow-hidden rounded-full bg-neutral-900/10">
                             <div
@@ -876,8 +881,10 @@ const destinationHost = (url) => {
                         <!-- Spending is real money; only an admin moves the ceiling. -->
                         <button
                             v-if="auth.can('manage_budget')"
-                            class="text-[11px] font-medium hover:underline"
-                            :class="budget.budget_usd === null ? 'text-amber-800' : 'text-blue-600'"
+                            class="text-[11px] font-medium transition"
+                            :class="budget.budget_usd === null
+                                ? 'rounded-md bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-800'
+                                : 'text-blue-600 hover:underline'"
                             @click="startEditBudget"
                         >
                             {{ budget.budget_usd === null ? 'Đặt trần' : 'Sửa trần' }}

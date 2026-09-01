@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import api from '../lib/api';
+import { inUse, loaded, loadTimezones, zones } from '../lib/timezones';
 import NavIcon from './NavIcon.vue';
 
 const props = defineProps({
@@ -22,10 +22,6 @@ const emit = defineEmits(['update:modelValue']);
  * Ordered by offset, the way X Ads Manager orders its own: the zones an hour
  * apart end up next to each other instead of four hundred rows apart.
  */
-const zones = ref([]);
-const inUse = ref([]);
-const loaded = ref(false);
-
 const open = ref(false);
 const search = ref('');
 const root = ref(null);
@@ -64,20 +60,9 @@ function place() {
     };
 }
 
-/* One fetch per page load, shared by every picker on it. */
-let request;
-
-onMounted(async () => {
-    request ??= api.get('timezones');
-
-    try {
-        const { data } = await request;
-        zones.value = data.data;
-        inUse.value = data.in_use;
-    } finally {
-        loaded.value = true;
-    }
-});
+// The list itself lives in lib/timezones: one array for every picker on the
+// page, rather than one copy per table row.
+onMounted(loadTimezones);
 
 const selected = computed(() => zones.value.find((zone) => zone.value === props.modelValue));
 
@@ -139,24 +124,42 @@ function onOutside(event) {
 // window -- otherwise the panel stays where the row used to be.
 const reposition = () => open.value && place();
 
-onMounted(() => {
+/*
+ * Attached only while the panel is open.
+ *
+ * A closed picker has nothing to reposition and nothing to dismiss, and this
+ * component appears once per table row. Two hundred rows was six hundred
+ * global listeners, of which the scroll one is in capture -- so every scroll
+ * anywhere ran two hundred handlers to decide, two hundred times, that nothing
+ * was open.
+ */
+function bind() {
     document.addEventListener('click', onOutside);
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition);
-});
+}
 
-onBeforeUnmount(() => {
+function unbind() {
     document.removeEventListener('click', onOutside);
     window.removeEventListener('scroll', reposition, true);
     window.removeEventListener('resize', reposition);
+}
+
+watch(open, (isOpen) => {
+    if (isOpen) {
+        bind();
+
+        return;
+    }
+
+    unbind();
+    // Reopening should start from the whole list, not from the last search.
+    search.value = '';
 });
 
-// Reopening should start from the whole list, not from the last search.
-watch(open, (isOpen) => {
-    if (!isOpen) {
-        search.value = '';
-    }
-});
+// A component unmounted while open -- a row filtered away mid-click -- would
+// otherwise leave its listeners behind.
+onBeforeUnmount(unbind);
 </script>
 
 <template>

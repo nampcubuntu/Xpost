@@ -45,15 +45,24 @@ class LinkStoreTest extends TestCase
     #[Test]
     public function it_lists_keys_with_their_values(): void
     {
-        // KV lists keys without values, so each row costs a second read.
+        /*
+         * KV lists keys without values, so the page needs the values too --
+         * fetched in one bulk read rather than a request per row, which at
+         * half a second each turned an eighty-key page into a minute.
+         */
         Http::fake([
             'api.cloudflare.com/*/keys*' => Http::response([
                 'success' => true,
                 'result' => [['name' => 'r:abc'], ['name' => 'r:def']],
                 'result_info' => ['cursor' => ''],
             ]),
-            'api.cloudflare.com/*/values/r%3Aabc' => Http::response('https://img/1|https://dest/'),
-            'api.cloudflare.com/*/values/r%3Adef' => Http::response('https://img/2|https://dest/'),
+            'api.cloudflare.com/*/bulk/get' => Http::response([
+                'success' => true,
+                'result' => ['values' => [
+                    'r:abc' => 'https://img/1|https://dest/',
+                    'r:def' => 'https://img/2|https://dest/',
+                ]],
+            ]),
         ]);
 
         $this->actingAs($this->user)
@@ -157,14 +166,21 @@ class LinkStoreTest extends TestCase
     #[Test]
     public function a_missing_value_reads_as_null_rather_than_failing(): void
     {
-        // KV reports an absent key as a 404, which is an answer, not an error.
+        /*
+         * A bulk read simply omits a key it could not find. A key listed a
+         * moment ago and gone by the read is a race, not an error -- an empty
+         * cell says that better than a failed page.
+         */
         Http::fake([
             'api.cloudflare.com/*/keys*' => Http::response([
                 'success' => true,
                 'result' => [['name' => 'r:gone']],
                 'result_info' => ['cursor' => ''],
             ]),
-            'api.cloudflare.com/*/values/*' => Http::response('', 404),
+            'api.cloudflare.com/*/bulk/get' => Http::response([
+                'success' => true,
+                'result' => ['values' => []],
+            ]),
         ]);
 
         $this->actingAs($this->user)

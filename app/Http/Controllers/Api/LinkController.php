@@ -56,18 +56,22 @@ class LinkController extends Controller
         }
 
         /*
-         * KV lists keys without their values, so each row costs a read. A page
-         * is a hundred keys, which is a hundred small requests -- slow enough to
-         * notice and still far quicker than opening a hundred dashboard rows.
+         * KV lists keys without their values, so the page needs a read per row.
+         * One at a time that was a round trip each -- 531ms measured from here
+         * to Cloudflare, so an eighty-key page spent three-quarters of a minute
+         * before the table appeared. The bulk endpoint answers the whole page
+         * in one.
          */
-        $rows = [];
+        $names = array_column($page['keys'], 'name');
+        $values = $this->kv->getMany($names);
 
-        foreach ($page['keys'] as $key) {
-            $rows[] = [
-                'key' => $key['name'],
-                'value' => $this->kv->get($key['name']),
-            ];
-        }
+        $rows = array_map(fn (string $name) => [
+            'key' => $name,
+            // Absent rather than null-checked: a key listed a moment ago and
+            // gone by the read is a race, not an error, and an empty cell says
+            // so better than a failed page.
+            'value' => $values[$name] ?? null,
+        ], $names);
 
         $domains = $this->domainList();
 

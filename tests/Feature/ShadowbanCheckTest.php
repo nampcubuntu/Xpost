@@ -49,12 +49,14 @@ class ShadowbanCheckTest extends TestCase
     }
 
     /** @param  array<int, array<string, mixed>>  $users */
-    private function fake(array $users, int $tweets): void
+    private function fake(array $users, int $tweets, array $extra = []): void
     {
         Http::fake([
             'api.sorsa.io/v3/search-users' => Http::response(['users' => $users]),
             'api.sorsa.io/v3/search-tweets' => Http::response([
-                'tweets' => array_fill(0, $tweets, ['id' => '1']),
+                'tweets' => array_fill(0, $tweets, ['id' => '1', 'is_replies_limited' => false] + $extra),
+                // Empty string, not null, is what the last page carries.
+                'next_cursor' => $extra['next_cursor'] ?? '',
             ]),
         ]);
     }
@@ -250,5 +252,61 @@ class ShadowbanCheckTest extends TestCase
         $this->fake([['username' => 'nancy_2z', 'protected' => false]], 0);
 
         $this->assertSame('unknown', app(ShadowbanChecker::class)->check($this->account())['detail']['search']);
+    }
+
+    #[Test]
+    public function a_page_of_results_is_not_reported_as_a_total(): void
+    {
+        /*
+         * The count is a page. The response carries a next_cursor, and the raw
+         * JSON for a real account showed one -- so twenty means twenty-and-more,
+         * and the page was printing it as though the account had exactly that
+         * many findable posts.
+         */
+        Http::fake([
+            'api.sorsa.io/v3/search-users' => Http::response([
+                'users' => [['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 119]],
+            ]),
+            'api.sorsa.io/v3/search-tweets' => Http::response([
+                'tweets' => array_fill(0, 20, ['id' => '1']),
+                'next_cursor' => 'DAADDAABCgAB',
+            ]),
+        ]);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame(20, $result['detail']['posts_found']);
+        $this->assertTrue($result['detail']['posts_more'], 'a page with more behind it was reported as the whole answer');
+    }
+
+    #[Test]
+    public function replies_limited_by_x_is_its_own_restriction(): void
+    {
+        /*
+         * is_replies_limited rides along on the posts the search already
+         * returned, so it costs nothing -- and it is the one restriction
+         * neither of the other tests can see: X limiting who can read an
+         * account's replies shows up nowhere in whether its posts are findable.
+         */
+        Http::fake([
+            'api.sorsa.io/v3/search-users' => Http::response([
+                'users' => [['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 119]],
+            ]),
+            'api.sorsa.io/v3/search-tweets' => Http::response([
+                'tweets' => [
+                    ['id' => '1', 'is_replies_limited' => false],
+                    ['id' => '2', 'is_replies_limited' => true],
+                ],
+                'next_cursor' => '',
+            ]),
+        ]);
+
+        $result = app(ShadowbanChecker::class)->check($this->account());
+
+        $this->assertSame('restricted', $result['detail']['replies']);
+        $this->assertSame(1, $result['detail']['replies_limited']);
+        // And it drags the account's overall verdict with it, since the other
+        // two tests passing does not make a limited account unlimited.
+        $this->assertSame('restricted', $result['state']);
     }
 }

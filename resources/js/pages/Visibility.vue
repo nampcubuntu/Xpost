@@ -174,7 +174,8 @@ function checks(account) {
             title: 'Chặn tìm kiếm bài',
             state: d.search,
             say: {
-                ok: `Bài của bạn xuất hiện trong tìm kiếm X. from:@${account.handle?.replace('@', '')} trả về ${d.posts_found} bài.`,
+                ok: `Bài của bạn xuất hiện trong tìm kiếm X. from: trả về ${d.posts_found}${d.posts_more ? '+' : ''} bài`
+                    + (d.posts_more ? ' (trang đầu — còn nữa).' : '.'),
                 restricted: `Bài bị ẩn khỏi tìm kiếm X. from: trả về 0 bài dù hồ sơ có ${d.posts_total} bài.`,
                 unknown: d.posts_total === 0
                     ? 'Tài khoản chưa đăng bài nào nên không có gì để kiểm tra — đây không phải hạn chế.'
@@ -188,6 +189,16 @@ function checks(account) {
             say: {
                 ok: 'Handle của bạn xuất hiện trong gợi ý tìm kiếm của X như bình thường.',
                 restricted: 'X không trả handle này trong tìm kiếm người dùng.',
+                unknown: 'Không hỏi được X ở lượt này.',
+            },
+        },
+        {
+            group: 'Hạn chế do X đặt',
+            title: 'Hạn chế trả lời',
+            state: d.replies,
+            say: {
+                ok: 'Không bài nào trong số vừa kiểm bị X giới hạn phần trả lời.',
+                restricted: `X giới hạn ai xem được phần trả lời của ${d.replies_limited} bài.`,
                 unknown: 'Không hỏi được X ở lượt này.',
             },
         },
@@ -310,7 +321,7 @@ const checkedAt = (iso) => (iso
 
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
-                <table class="w-full min-w-[1040px] text-left text-[13px]">
+                <table class="w-full min-w-[1180px] text-left text-[13px]">
                     <thead class="border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
                         <tr>
                             <th class="w-10 py-2.5 pl-4 pr-1">
@@ -326,6 +337,7 @@ const checkedAt = (iso) => (iso
                             -->
                             <th class="px-4 py-2.5 font-medium">Tìm kiếm bài</th>
                             <th class="px-4 py-2.5 font-medium">Gợi ý handle</th>
+                            <th class="px-4 py-2.5 font-medium">Hạn chế trả lời</th>
                             <th class="border-l border-neutral-200 px-4 py-2.5 font-medium">Nhạy cảm</th>
                             <th class="px-4 py-2.5 font-medium">Riêng tư</th>
                             <th class="px-4 py-2.5 font-medium">Kiểm lúc</th>
@@ -333,8 +345,8 @@ const checkedAt = (iso) => (iso
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
-                        <tr v-if="loading"><td colspan="9" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
-                        <tr v-else-if="!accounts.length"><td colspan="9" class="px-4 py-8 text-center text-neutral-500">Không có tài khoản nào.</td></tr>
+                        <tr v-if="loading"><td colspan="10" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
+                        <tr v-else-if="!accounts.length"><td colspan="10" class="px-4 py-8 text-center text-neutral-500">Không có tài khoản nào.</td></tr>
 
                         <template v-for="account in accounts" :key="account.id">
                         <tr class="hover:bg-neutral-50"
@@ -383,6 +395,14 @@ const checkedAt = (iso) => (iso
                                 <span v-else class="text-neutral-300">—</span>
                             </td>
 
+                            <td class="px-4 py-2.5">
+                                <span v-if="account.visibility_detail?.replies"
+                                      :class="testLabel[account.visibility_detail.replies]?.class">
+                                    {{ testLabel[account.visibility_detail.replies]?.text }}
+                                </span>
+                                <span v-else class="text-neutral-300">—</span>
+                            </td>
+
                             <!--
                                 A setting reads yes/no, not detected/clear: it is
                                 something the account chose, and calling it a
@@ -422,7 +442,7 @@ const checkedAt = (iso) => (iso
                             search at all.
                         -->
                         <tr v-if="openFor === account.id">
-                            <td colspan="9" class="bg-neutral-50 px-4 py-3">
+                            <td colspan="10" class="bg-neutral-50 px-4 py-3">
                                 <p v-if="!account.visibility_checked_at" class="text-[13px] text-neutral-500">
                                     Chưa kiểm tra tài khoản này lần nào.
                                 </p>

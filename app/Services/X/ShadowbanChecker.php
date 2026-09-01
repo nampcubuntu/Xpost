@@ -54,6 +54,7 @@ final class ShadowbanChecker
 
         $profile = $this->searchUsers($handle);
         $posts = $this->searchTweets($handle);
+        $found = $posts['found'] ?? null;
 
         $detail = [
             /*
@@ -75,9 +76,22 @@ final class ShadowbanChecker
              * tested came back with zero results, and only its tweets_count
              * settled whether that meant anything.
              */
-            'search' => $this->searchVerdict($posts, $profile['tweets_count'] ?? null),
+            'search' => $this->searchVerdict($found, $profile['tweets_count'] ?? null),
 
-            'posts_found' => $posts,
+            /*
+             * X limiting who can see an account's replies. Read off the
+             * posts the search already returned, so it costs nothing --
+             * and it is a restriction the other two tests cannot see.
+             */
+            'replies' => $posts === null
+                ? self::UNKNOWN
+                : ($posts['replies_limited'] > 0 ? self::RESTRICTED : self::OK),
+
+            'posts_found' => $found,
+            // True when search had more pages, so posts_found is a page
+            // rather than a total and must not be printed as one.
+            'posts_more' => $posts['has_more'] ?? null,
+            'replies_limited' => $posts['replies_limited'] ?? null,
             'posts_total' => $profile['tweets_count'] ?? null,
 
             /*
@@ -137,13 +151,13 @@ final class ShadowbanChecker
             return 'protected';
         }
 
-        if (in_array(self::RESTRICTED, [$detail['search_suggestion'], $detail['search']], true)) {
+        if (in_array(self::RESTRICTED, [$detail['search_suggestion'], $detail['search'], $detail['replies']], true)) {
             return self::RESTRICTED;
         }
 
         // Unknown wins over ok: a check that could not reach X has not cleared
         // anything.
-        if (in_array(self::UNKNOWN, [$detail['search_suggestion'], $detail['search']], true)) {
+        if (in_array(self::UNKNOWN, [$detail['search_suggestion'], $detail['search'], $detail['replies']], true)) {
             return self::UNKNOWN;
         }
 
@@ -183,8 +197,21 @@ final class ShadowbanChecker
         return ['found' => false, 'protected' => null, 'sensitive' => null, 'tweets_count' => null];
     }
 
-    /** How many of the account's posts search returns, or null when it failed. */
-    private function searchTweets(string $handle): ?int
+    /**
+     * What search returns for `from:handle`, or null when the call failed.
+     *
+     * More than a count, because the count on its own was being read as "this
+     * many posts are findable" -- and it is a page. The response carries a
+     * next_cursor, so twenty means twenty-and-more, and the page has to say so
+     * rather than print a number that looks total.
+     *
+     * is_replies_limited comes from the same response and is the one restriction
+     * neither of these two calls was being asked about: X limiting who can see
+     * an account's replies, which no amount of searching for its posts reveals.
+     *
+     * @return array{found: int, has_more: bool, replies_limited: int}|null
+     */
+    private function searchTweets(string $handle): ?array
     {
         $body = $this->post('search-tweets', [
             'query' => "from:{$handle}",
@@ -193,7 +220,21 @@ final class ShadowbanChecker
             'order' => 'latest',
         ]);
 
-        return $body === null ? null : count((array) ($body['tweets'] ?? []));
+        if ($body === null) {
+            return null;
+        }
+
+        $tweets = (array) ($body['tweets'] ?? []);
+
+        return [
+            'found' => count($tweets),
+            // Cloudflare-style empty string, not null, on the last page.
+            'has_more' => filled($body['next_cursor'] ?? null),
+            'replies_limited' => count(array_filter(
+                $tweets,
+                fn (array $t) => ($t['is_replies_limited'] ?? false) === true,
+            )),
+        ];
     }
 
     /**

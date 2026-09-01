@@ -317,7 +317,23 @@ async function remove(key) {
     try {
         await api.delete('links', { data: { key } });
         rows.value = rows.value.filter((row) => row.key !== key);
-        flash.value = { type: 'ok', message: `Đã xoá ${key}.` };
+
+        /*
+         * The delay is said out loud because it looks exactly like a failure.
+         *
+         * KV is eventually consistent, and a read populates the edge that
+         * served it. This page reads every key on the list before you can click
+         * anything, so the cache is always warm by the time a delete lands --
+         * and a read in the following minute, in the Cloudflare dashboard or
+         * through the Worker, can still answer with the old value. Measured
+         * here: gone from listKeys immediately, still returned by a read that
+         * had been warmed beforehand.
+         */
+        flash.value = {
+            type: 'ok',
+            message: `Đã xoá ${key} khỏi Cloudflare. Link có thể còn phân giải thêm ~60 giây `
+                + 'do KV lưu tạm ở edge — biến mất khỏi danh sách là đã xoá thật.',
+        };
     } catch (error) {
         flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không xoá được.' };
     } finally {

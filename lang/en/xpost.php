@@ -44,7 +44,6 @@ return [
     'errors' => [
         'post_not_editable' => 'This post is ":status" and can no longer be edited or republished.',
         'app_has_accounts' => 'This app still has :count account(s) attached. Move them first.',
-        'proxy_in_use' => 'This proxy is assigned to accounts. Unassign them before deleting.',
         'media_in_use' => 'This file is used by an existing post.',
         'not_a_member' => 'You are not a member of that team.',
         'no_app_capacity' => 'No X app in the pool has budget left. Add another app or raise the tier.',

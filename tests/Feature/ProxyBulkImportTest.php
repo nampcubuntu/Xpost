@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Jobs\CheckProxy;
 use App\Models\Proxy;
 use App\Models\Team;
+use App\Models\XAccount;
 use App\Support\TeamContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -280,23 +281,80 @@ class ProxyBulkImportTest extends TestCase
     }
 
     #[Test]
-    public function proxies_still_carrying_accounts_are_kept_and_named(): void
+    public function deleting_lets_go_of_the_accounts_behind_it(): void
     {
         /*
-         * Rather than refusing the whole request: a selection of fifty where
-         * two are in use should delete forty-eight and say which two it kept.
+         * This used to refuse while any account was assigned, which made the
+         * only way to retire a dead proxy a hunt through the accounts page for
+         * every row pointing at it. The supplier's line is dead either way --
+         * the refusal did not keep those accounts working, it kept them
+         * pointing at something that no longer answers.
          */
-        $free = $this->proxy(['assigned_count' => 0]);
-        $inUse = $this->proxy(['assigned_count' => 4, 'label' => 'Proxy đang dùng']);
+        $proxy = $this->proxy();
+        $accounts = collect(range(1, 3))
+            ->map(fn () => XAccount::factory()->create(['team_id' => $this->team->id, 'proxy_id' => $proxy->id]))
+            ->all();
+
+        $this->deleteJson("/api/v1/proxies/{$proxy->id}")
+            ->assertOk()
+            ->assertJsonPath('unassigned', 3);
+
+        $this->assertNull($proxy->fresh());
+
+        foreach ($accounts as $account) {
+            $this->assertNull($account->fresh()->proxy_id);
+        }
+    }
+
+    #[Test]
+    public function a_selection_takes_its_accounts_with_it(): void
+    {
+        // The same rule from the bulk end: a selection of fifty where two are
+        // in use deletes fifty, rather than forty-eight and an explanation.
+        $free = $this->proxy();
+        $inUse = $this->proxy();
+
+        XAccount::factory()->create(['team_id' => $this->team->id, 'proxy_id' => $inUse->id]);
 
         $this->deleteJson('/api/v1/proxies', ['ids' => [$free->id, $inUse->id]])
             ->assertOk()
-            ->assertJsonPath('deleted', 1)
-            ->assertJsonCount(1, 'skipped')
-            ->assertJsonPath('skipped.0.label', 'Proxy đang dùng');
+            ->assertJsonPath('deleted', 2)
+            ->assertJsonPath('unassigned', 1);
 
-        $this->assertNull($free->fresh());
-        $this->assertNotNull($inUse->fresh());
+        $this->assertSame(0, Proxy::query()->count());
+    }
+
+    #[Test]
+    public function only_the_accounts_behind_that_proxy_are_released(): void
+    {
+        /*
+         * The release is one bulk update rather than a save per account,
+         * because a proxy can carry its whole max_accounts -- and a bulk update
+         * that loses its filter is a single statement that unassigns the entire
+         * team. Everything would still look right on the row that was deleted.
+         *
+         * The neighbour is the account on another proxy of the same team, which
+         * is the one a lost filter takes with it. The stranger is on another
+         * team entirely: not the same failure, and it is a weaker check, since
+         * the foreign key is nullOnDelete and would clear a genuinely
+         * cross-team assignment whatever the application decided.
+         */
+        $doomed = $this->proxy();
+        $keeper = $this->proxy();
+
+        $released = XAccount::factory()->create(['team_id' => $this->team->id, 'proxy_id' => $doomed->id]);
+        $neighbour = XAccount::factory()->create(['team_id' => $this->team->id, 'proxy_id' => $keeper->id]);
+
+        $theirs = Proxy::factory()->create();
+        $stranger = XAccount::factory()->create(['team_id' => $theirs->team_id, 'proxy_id' => $theirs->id]);
+
+        $this->deleteJson("/api/v1/proxies/{$doomed->id}")
+            ->assertOk()
+            ->assertJsonPath('unassigned', 1);
+
+        $this->assertNull($released->fresh()->proxy_id);
+        $this->assertSame($keeper->id, $neighbour->fresh()->proxy_id);
+        $this->assertSame($theirs->id, $stranger->fresh()->proxy_id);
     }
 
     #[Test]

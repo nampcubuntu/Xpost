@@ -184,45 +184,73 @@ class ProxyController extends Controller
         return response()->json($proxy->fresh());
     }
 
+    /**
+     * Deleted, and the accounts behind it let go first.
+     *
+     * This used to refuse while any account was assigned, which made the only
+     * way to retire a dead proxy a hunt through the accounts page for the
+     * hundred rows pointing at it. The supplier's line is dead either way; the
+     * refusal did not keep those accounts working, it just kept them pointing
+     * at something that no longer answers.
+     *
+     * So the assignment is cut here and the count comes back, because it is a
+     * consequence worth reading: those accounts now go out from the server's
+     * own IP until they are given another proxy, which is the one thing this
+     * page exists to prevent.
+     */
     public function destroy(Proxy $proxy): JsonResponse
     {
         $this->authorize('create', XAccount::class);
 
-        if ($proxy->assigned_count > 0) {
-            return response()->json(['message' => __('xpost.errors.proxy_in_use')], 422);
-        }
+        $unassigned = $this->detach([$proxy->id]);
 
         $proxy->delete();
 
-        return response()->json(status: 204);
+        return response()->json(['unassigned' => $unassigned]);
     }
 
-    /**
-     * A selection deleted in one go.
-     *
-     * Proxies still carrying accounts are left alone and named, rather than the
-     * whole request being refused: a selection of fifty where two are in use
-     * should delete forty-eight and say which two it kept.
-     */
+    /** A selection deleted in one go, accounts released the same way. */
     public function destroyMany(Request $request): JsonResponse
     {
         $this->authorize('create', XAccount::class);
 
         $proxies = $this->selection($request);
+        $unassigned = $this->detach($proxies->modelKeys());
 
-        $inUse = $proxies->filter(fn (Proxy $proxy) => $proxy->assigned_count > 0);
-        $deletable = $proxies->reject(fn (Proxy $proxy) => $proxy->assigned_count > 0);
-
-        Proxy::query()->whereKey($deletable->modelKeys())->delete();
+        Proxy::query()->whereKey($proxies->modelKeys())->delete();
 
         return response()->json([
-            'deleted' => $deletable->count(),
-            'skipped' => $inUse->map(fn (Proxy $proxy) => [
-                'id' => $proxy->id,
-                'label' => $proxy->label ?? "{$proxy->host}:{$proxy->port}",
-                'reason' => __('xpost.errors.proxy_in_use'),
-            ])->values(),
+            'deleted' => $proxies->count(),
+            'unassigned' => $unassigned,
         ]);
+    }
+
+    /**
+     * Release every account sitting behind these proxies.
+     *
+     * One statement rather than a save per account: a proxy can carry its whole
+     * max_accounts, and a selection can carry two thousand proxies, so this is
+     * the difference between one update and tens of thousands.
+     *
+     * That skips XAccountObserver, which keeps proxies.assigned_count in step
+     * -- and here that is the point rather than an oversight, because the rows
+     * whose counter it would fix are about to be deleted.
+     *
+     * Done explicitly even though the foreign key is nullOnDelete and would do
+     * it anyway: the database would do it silently, and this has to be able to
+     * say how many accounts it touched.
+     *
+     * @param  array<int, int>  $proxyIds
+     */
+    private function detach(array $proxyIds): int
+    {
+        if ($proxyIds === []) {
+            return 0;
+        }
+
+        return XAccount::query()
+            ->whereIn('proxy_id', $proxyIds)
+            ->update(['proxy_id' => null]);
     }
 
     /**

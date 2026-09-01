@@ -306,12 +306,40 @@ async function checkSelected() {
     }
 }
 
-async function removeSelected() {
-    const count = selected.value.size;
+/*
+ * How many accounts a delete would set loose.
+ *
+ * Exact rather than an estimate: load() prunes the selection to the rows it
+ * just fetched, so a tick can never survive a page change and everything
+ * selected is on screen with its counter in hand.
+ */
+const selectedAccounts = computed(() => proxies.value
+    .filter((proxy) => selected.value.has(proxy.id))
+    .reduce((total, proxy) => total + (proxy.assigned_count ?? 0), 0));
 
-    // Confirmed because accounts are assigned to these: a proxy deleted out
-    // from under them is a publish that starts failing tomorrow.
-    if (!window.confirm(`Xoá ${count} proxy đã chọn?`)) {
+/*
+ * Said out loud before it happens, not refused.
+ *
+ * Deleting releases whatever accounts were behind these, and those accounts
+ * then go out from the server's own IP until they are given another proxy --
+ * which is the one thing this page exists to prevent. That is a consequence to
+ * put in front of someone, not a reason to make a dead proxy undeletable.
+ */
+function confirmDelete(count, accounts) {
+    const subject = `Xoá ${count} proxy`;
+
+    if (! accounts) {
+        return window.confirm(`${subject}?`);
+    }
+
+    return window.confirm(
+        `${subject}?\n\n${accounts} tài khoản đang dùng sẽ được gỡ gán và tạm đi ra bằng IP máy chủ `
+        + 'cho tới khi bạn gán proxy khác.'
+    );
+}
+
+async function removeSelected() {
+    if (! confirmDelete(selected.value.size, selectedAccounts.value)) {
         return;
     }
 
@@ -320,12 +348,11 @@ async function removeSelected() {
     try {
         const { data } = await api.delete('proxies', { data: { ids: [...selected.value] } });
 
-        // Named, not counted: "2 bị bỏ qua" is not something anyone can act on.
-        if (data.skipped.length) {
-            window.alert(
-                `Đã xoá ${data.deleted}. Còn ${data.skipped.length} proxy đang gán tài khoản:\n\n`
-                + data.skipped.map((row) => `• ${row.label}`).join('\n')
-            );
+        // Only when there is something to say. A confirmed delete that freed
+        // nothing has already told the operator everything by the row going
+        // away, and an alert for it is a second click for no news.
+        if (data.unassigned) {
+            window.alert(`Đã xoá ${data.deleted} proxy. ${data.unassigned} tài khoản đang chờ gán proxy khác.`);
         }
 
         selected.value = new Set();
@@ -349,12 +376,17 @@ async function check(proxy) {
 }
 
 async function remove(proxy) {
-    if (!window.confirm('Xoá proxy này?')) {
+    if (! confirmDelete(1, proxy.assigned_count ?? 0)) {
         return;
     }
 
     try {
-        await api.delete(`proxies/${proxy.id}`);
+        const { data } = await api.delete(`proxies/${proxy.id}`);
+
+        if (data.unassigned) {
+            window.alert(`Đã xoá proxy. ${data.unassigned} tài khoản đang chờ gán proxy khác.`);
+        }
+
         await load();
     } catch (error) {
         window.alert(error.response?.data?.message ?? 'Không xoá được.');

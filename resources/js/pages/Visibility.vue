@@ -22,6 +22,17 @@ const busy = ref(false);
 const flash = ref(null);
 const selected = ref(new Set());
 
+/*
+ * The four checks, expanded under the row that was clicked.
+ *
+ * Not four more columns: the table is already at its minimum width, and
+ * two of the four are the account's own settings rather than anything X
+ * imposed -- which is a distinction that needs a sentence, not a cell.
+ */
+const openFor = ref(null);
+
+const toggleDetail = (id) => (openFor.value = openFor.value === id ? null : id);
+
 const states = [
     { value: '', label: 'Mọi trạng thái' },
     { value: 'ok', label: 'Bình thường' },
@@ -147,6 +158,79 @@ async function check(ids) {
     }
 }
 
+/*
+ * What each check means, in the account's own terms.
+ *
+ * Split into what X did and what the account chose, because the second group
+ * explains the first: a protected account cannot appear in search at all, so a
+ * search ban reading on one is unmeasurable rather than positive.
+ */
+function checks(account) {
+    const d = account.visibility_detail ?? {};
+
+    return [
+        {
+            group: 'Hạn chế do X đặt',
+            title: 'Chặn tìm kiếm bài',
+            state: d.search,
+            say: {
+                ok: `Bài của bạn xuất hiện trong tìm kiếm X. from:@${account.handle?.replace('@', '')} trả về ${d.posts_found} bài.`,
+                restricted: `Bài bị ẩn khỏi tìm kiếm X. from: trả về 0 bài dù hồ sơ có ${d.posts_total} bài.`,
+                unknown: d.posts_total === 0
+                    ? 'Tài khoản chưa đăng bài nào nên không có gì để kiểm tra — đây không phải hạn chế.'
+                    : 'Không hỏi được X ở lượt này.',
+            },
+        },
+        {
+            group: 'Hạn chế do X đặt',
+            title: 'Chặn gợi ý handle',
+            state: d.search_suggestion,
+            say: {
+                ok: 'Handle của bạn xuất hiện trong gợi ý tìm kiếm của X như bình thường.',
+                restricted: 'X không trả handle này trong tìm kiếm người dùng.',
+                unknown: 'Không hỏi được X ở lượt này.',
+            },
+        },
+        {
+            group: 'Cài đặt hồ sơ',
+            title: 'Hồ sơ nhạy cảm',
+            // A setting, so the words are flagged/not flagged rather than
+            // detected/not detected.
+            state: d.sensitive === null || d.sensitive === undefined
+                ? 'unknown'
+                : (d.sensitive ? 'restricted' : 'ok'),
+            say: {
+                ok: 'Tài khoản không bị đánh dấu nhạy cảm. Media hiện bình thường, không có cảnh báo nội dung.',
+                restricted: 'Tài khoản bị đánh dấu nhạy cảm — media sẽ kèm cảnh báo nội dung trước khi xem được.',
+                unknown: 'Chưa đọc được cờ này.',
+            },
+        },
+        {
+            group: 'Cài đặt hồ sơ',
+            title: 'Quyền riêng tư',
+            state: d.protected === null || d.protected === undefined
+                ? 'unknown'
+                : (d.protected ? 'restricted' : 'ok'),
+            say: {
+                ok: 'Tài khoản ở chế độ công khai, nên hai bài kiểm tra trên chạy bình thường.',
+                restricted: 'Tài khoản ở chế độ riêng tư. Hai bài kiểm tra trên không đo được — đó là cài đặt của bạn, không phải X hạn chế.',
+                unknown: 'Chưa đọc được cờ này.',
+            },
+        },
+    ];
+}
+
+/** A setting reads "đã bật", a restriction reads "phát hiện". */
+const verdictWord = {
+    'Hạn chế do X đặt': { ok: 'Không có', restricted: 'PHÁT HIỆN', unknown: 'Chưa rõ' },
+    'Cài đặt hồ sơ': { ok: 'Không', restricted: 'CÓ', unknown: 'Chưa rõ' },
+};
+
+const verdictClass = {
+    ok: 'bg-green-50 text-green-700',
+    restricted: 'bg-red-50 text-red-700 ring-1 ring-red-200',
+    unknown: 'bg-amber-50 text-amber-800 ring-1 ring-amber-200',
+};
 const checkedAt = (iso) => (iso
     ? new Date(iso).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
     : null);
@@ -244,13 +328,22 @@ const checkedAt = (iso) => (iso
                         <tr v-if="loading"><td colspan="7" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
                         <tr v-else-if="!accounts.length"><td colspan="7" class="px-4 py-8 text-center text-neutral-500">Không có tài khoản nào.</td></tr>
 
-                        <tr v-for="account in accounts" :key="account.id" class="hover:bg-neutral-50"
+                        <template v-for="account in accounts" :key="account.id">
+                        <tr class="hover:bg-neutral-50"
                             :class="selected.has(account.id) ? 'bg-neutral-50' : ''">
                             <td class="w-10 py-2.5 pl-4 pr-1">
                                 <input type="checkbox" :checked="selected.has(account.id)" class="align-middle" @change="toggle(account.id)">
                             </td>
-                            <td class="px-4 py-2.5">
-                                <p class="font-medium">{{ account.handle }}</p>
+                            <td class="cursor-pointer px-4 py-2.5" @click="toggleDetail(account.id)">
+                                <p class="flex items-center gap-1.5 font-medium">
+                                    <NavIcon
+                                        name="chevron"
+                                        :size="12"
+                                        class="text-neutral-400 transition"
+                                        :class="openFor === account.id ? 'rotate-180' : '-rotate-90'"
+                                    />
+                                    {{ account.handle }}
+                                </p>
                                 <p class="truncate text-xs text-neutral-500">{{ account.name }}</p>
                             </td>
                             <td class="px-4 py-2.5">
@@ -295,6 +388,45 @@ const checkedAt = (iso) => (iso
                                 >Kiểm tra</button>
                             </td>
                         </tr>
+
+                        <!--
+                            All four checks, grouped the way they actually
+                            differ: two are things X did, two are the account's
+                            own settings -- and the second pair is what explains
+                            the first, since a private account cannot appear in
+                            search at all.
+                        -->
+                        <tr v-if="openFor === account.id">
+                            <td colspan="7" class="bg-neutral-50 px-4 py-3">
+                                <p v-if="!account.visibility_checked_at" class="text-[13px] text-neutral-500">
+                                    Chưa kiểm tra tài khoản này lần nào.
+                                </p>
+
+                                <div v-else class="max-w-3xl overflow-hidden rounded-lg border border-neutral-200 bg-white">
+                                    <template v-for="(row, i) in checks(account)" :key="row.title">
+                                        <p
+                                            v-if="i === 0 || checks(account)[i - 1].group !== row.group"
+                                            class="border-b border-neutral-100 bg-neutral-50 px-4 py-1.5 text-[11px] uppercase tracking-wide text-neutral-500"
+                                        >{{ row.group }}</p>
+
+                                        <div class="flex items-start gap-3 border-b border-neutral-100 px-4 py-2.5 last:border-b-0">
+                                            <div class="min-w-0 flex-1">
+                                                <p class="text-[13px] font-medium">{{ row.title }}</p>
+                                                <p class="mt-0.5 text-[12.5px] leading-relaxed text-neutral-600">
+                                                    {{ row.say[row.state] ?? 'Chưa có dữ liệu.' }}
+                                                </p>
+                                            </div>
+
+                                            <span
+                                                class="shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium"
+                                                :class="verdictClass[row.state] ?? verdictClass.unknown"
+                                            >{{ verdictWord[row.group][row.state] ?? 'Chưa rõ' }}</span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </td>
+                        </tr>
+                        </template>
                     </tbody>
                 </table>
             </div>

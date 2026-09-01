@@ -64,8 +64,6 @@ class XAccount extends Model
             'health_score' => 'integer',
             'daily_post_cap' => 'integer',
             'consecutive_failures' => 'integer',
-            'visibility_detail' => 'array',
-            'visibility_checked_at' => 'datetime',
         ];
     }
 

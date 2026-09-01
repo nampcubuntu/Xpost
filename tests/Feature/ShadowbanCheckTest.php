@@ -6,7 +6,7 @@ namespace Tests\Feature;
 
 use App\Jobs\CheckAccountVisibility;
 use App\Models\Team;
-use App\Models\XAccount;
+use App\Models\VisibilityCheck;
 use App\Services\X\ShadowbanChecker;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -15,13 +15,16 @@ use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
 /**
- * Whether X is quietly limiting an account's reach.
+ * Whether X is quietly limiting a handle's reach.
  *
  * There is no shadowban endpoint anywhere, so the answer is composed from two
  * calls that exist: does X's people-search return the handle, and does
  * `from:handle` return any posts. What has to hold is that the three answers
  * stay three -- "not restricted" and "could not tell" are different things, and
- * collapsing them reports a clean bill of health for an account never reached.
+ * collapsing them reports a clean bill of health for a handle never reached.
+ *
+ * Asked about handles rather than connected accounts, because the useful ones
+ * include names this install has never posted from.
  */
 class ShadowbanCheckTest extends TestCase
 {
@@ -43,34 +46,50 @@ class ShadowbanCheckTest extends TestCase
         ]);
     }
 
-    private function account(string $username = 'nancy_2z'): XAccount
-    {
-        return XAccount::factory()->create(['team_id' => $this->team->id, 'username' => $username]);
-    }
-
     /** @param  array<int, array<string, mixed>>  $users */
-    private function fake(array $users, int $tweets, array $extra = []): void
+    private function fake(array $users, int $tweets, string $cursor = ''): void
     {
         Http::fake([
             'api.sorsa.io/v3/search-users' => Http::response(['users' => $users]),
             'api.sorsa.io/v3/search-tweets' => Http::response([
-                'tweets' => array_fill(0, $tweets, ['id' => '1', 'is_replies_limited' => false] + $extra),
+                'tweets' => array_fill(0, $tweets, ['id' => '1', 'is_replies_limited' => false]),
                 // Empty string, not null, is what the last page carries.
-                'next_cursor' => $extra['next_cursor'] ?? '',
+                'next_cursor' => $cursor,
             ]),
         ]);
     }
 
-    #[Test]
-    public function an_account_x_is_not_limiting_reads_as_clear(): void
+    private function profile(array $overrides = []): array
     {
-        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'possibly_sensitive' => false, 'tweets_count' => 40]], 20);
+        return $overrides + [
+            'username' => 'nancy_2z',
+            'protected' => false,
+            'possibly_sensitive' => false,
+            'tweets_count' => 119,
+        ];
+    }
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+    private function row(array $attributes = []): VisibilityCheck
+    {
+        return VisibilityCheck::query()->create($attributes + [
+            'team_id' => $this->team->id,
+            'handle' => 'nancy_2z',
+        ]);
+    }
+
+    // ── The composition ───────────────────────────────────────────────────
+
+    #[Test]
+    public function a_handle_x_is_not_limiting_reads_as_clear(): void
+    {
+        $this->fake([$this->profile()], 20);
+
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame('ok', $result['state']);
         $this->assertSame('ok', $result['detail']['search']);
         $this->assertSame('ok', $result['detail']['search_suggestion']);
+        $this->assertSame('ok', $result['detail']['replies']);
         $this->assertSame(20, $result['detail']['posts_found']);
     }
 
@@ -79,36 +98,65 @@ class ShadowbanCheckTest extends TestCase
     {
         // Reached X, and the handle was not among the results -- which is the
         // classic search suggestion ban.
-        $this->fake([['username' => 'someone_else', 'protected' => false]], 20);
+        $this->fake([$this->profile(['username' => 'someone_else'])], 20);
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame('restricted', $result['state']);
         $this->assertSame('restricted', $result['detail']['search_suggestion']);
     }
 
     #[Test]
-    public function no_posts_in_search_is_a_search_ban(): void
+    public function posts_on_the_profile_and_none_in_search_is_a_search_ban(): void
     {
-        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 40]], 0);
+        $this->fake([$this->profile()], 0);
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame('restricted', $result['state']);
         $this->assertSame('restricted', $result['detail']['search']);
     }
 
     #[Test]
+    public function a_handle_that_never_posted_is_not_a_search_ban(): void
+    {
+        /*
+         * Found by running against the live API rather than by thinking about
+         * it. The first real handle tested returned nothing for `from:`, and
+         * only its tweets_count settled whether that meant anything.
+         *
+         * Nothing came back is only a ban if there was something to come back.
+         */
+        $this->fake([$this->profile(['tweets_count' => 0])], 0);
+
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
+
+        $this->assertSame('unknown', $result['detail']['search'], 'a handle with no posts was called search-banned');
+        $this->assertNotSame('restricted', $result['state']);
+    }
+
+    #[Test]
+    public function an_unreadable_post_count_does_not_invent_the_alarming_answer(): void
+    {
+        // Guessing here would manufacture a shadowban out of a missing field.
+        $this->fake([['username' => 'nancy_2z', 'protected' => false]], 0);
+
+        $this->assertSame('unknown', app(ShadowbanChecker::class)->check('nancy_2z')['detail']['search']);
+    }
+
+    // ── Three states, never two ───────────────────────────────────────────
+
+    #[Test]
     public function a_failed_call_is_unknown_and_never_clear(): void
     {
         /*
-         * The whole point of three states. A check that could not reach X has
-         * cleared nothing, and reporting it as "no restrictions detected" is
-         * the same lie as a proxy showing healthy from a check five days ago.
+         * The whole point. A check that could not reach X has cleared nothing,
+         * and reporting it as "no restrictions detected" is the same lie as a
+         * proxy showing healthy from a check five days ago.
          */
         Http::fake(['api.sorsa.io/*' => Http::response(['message' => 'rate limited'], 429)]);
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame('unknown', $result['state']);
         $this->assertSame('unknown', $result['detail']['search']);
@@ -118,16 +166,13 @@ class ShadowbanCheckTest extends TestCase
     #[Test]
     public function one_call_failing_does_not_clear_the_other(): void
     {
-        // A partial answer is still partial. The suggestion test succeeded and
-        // the search test did not, so the row cannot say "ok".
+        // A partial answer is still partial.
         Http::fake([
-            'api.sorsa.io/v3/search-users' => Http::response([
-                'users' => [['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 40]],
-            ]),
+            'api.sorsa.io/v3/search-users' => Http::response(['users' => [$this->profile()]]),
             'api.sorsa.io/v3/search-tweets' => Http::response(['message' => 'boom'], 500),
         ]);
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame('unknown', $result['state']);
         $this->assertSame('ok', $result['detail']['search_suggestion']);
@@ -135,20 +180,22 @@ class ShadowbanCheckTest extends TestCase
     }
 
     #[Test]
-    public function a_private_account_is_not_reported_as_shadowbanned(): void
+    public function a_private_handle_is_not_reported_as_shadowbanned(): void
     {
         /*
          * The visibility tests cannot see a protected account by design, so an
          * empty search result there means nothing. Calling it a shadowban would
          * send someone hunting for something X never did.
          */
-        $this->fake([['username' => 'nancy_2z', 'protected' => true, 'tweets_count' => 40]], 0);
+        $this->fake([$this->profile(['protected' => true])], 0);
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame('protected', $result['state']);
         $this->assertTrue($result['detail']['protected']);
     }
+
+    // ── Reading the response ──────────────────────────────────────────────
 
     #[Test]
     public function the_handle_is_matched_whatever_case_x_returns_it_in(): void
@@ -157,123 +204,23 @@ class ShadowbanCheckTest extends TestCase
         // not echo the case it was asked with.
         $this->fake([
             ['username' => 'nancy_other'],
-            ['username' => 'NANCY_2Z', 'protected' => false, 'tweets_count' => 40],
+            $this->profile(['username' => 'NANCY_2Z']),
         ], 5);
 
-        $this->assertSame('ok', app(ShadowbanChecker::class)->check($this->account())['state']);
-    }
-
-    #[Test]
-    public function a_sweep_is_queued_rather_than_answered_inline(): void
-    {
-        /*
-         * Two Sorsa calls per account against a flat twenty a second, so a
-         * thousand accounts is a hundred seconds at best -- not something to
-         * hold an HTTP request open for.
-         */
-        Queue::fake();
-
-        $ids = [$this->account('a')->id, $this->account('b')->id];
-
-        $this->actingAs($this->user->refresh())
-            ->postJson('/api/v1/accounts/visibility', ['account_ids' => $ids])
-            ->assertStatus(202)
-            ->assertJsonPath('queued', 2);
-
-        Queue::assertPushed(CheckAccountVisibility::class, 2);
-    }
-
-    #[Test]
-    public function without_a_key_the_page_is_told_rather_than_shown_empty_rows(): void
-    {
-        // A column of blanks looks like every account being fine. It is a
-        // missing setting, and only the message can tell them apart.
-        config(['xpost.links.sorsa.key' => null]);
-
-        $this->actingAs($this->user->refresh())
-            ->postJson('/api/v1/accounts/visibility', ['account_ids' => [$this->account()->id]])
-            ->assertStatus(422);
-    }
-
-    #[Test]
-    public function the_verdict_is_stored_with_the_moment_it_was_reached(): void
-    {
-        // A verdict with no date is a claim about now made from whenever.
-        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 40]], 12);
-
-        $account = $this->account();
-
-        (new CheckAccountVisibility($account->id, $this->team->id))->handle(app(ShadowbanChecker::class));
-
-        $account->refresh();
-
-        $this->assertSame('ok', $account->visibility_state);
-        $this->assertNotNull($account->visibility_checked_at);
-        $this->assertSame(12, $account->visibility_detail['posts_found']);
-    }
-
-    #[Test]
-    public function an_account_that_never_posted_is_not_a_search_ban(): void
-    {
-        /*
-         * Found by running against the live API rather than by thinking about
-         * it. The first real account tested returned nothing for
-         * `from:handle`, and only its tweets_count settled whether that meant
-         * anything -- the comment in the code claimed this guard existed
-         * before the code did.
-         *
-         * Nothing came back is only a ban if there was something to come back.
-         */
-        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 0]], 0);
-
-        $result = app(ShadowbanChecker::class)->check($this->account());
-
-        $this->assertSame('unknown', $result['detail']['search'], 'an account with no posts was called search-banned');
-        $this->assertNotSame('restricted', $result['state']);
-    }
-
-    #[Test]
-    public function an_account_with_posts_and_none_in_search_is_a_search_ban(): void
-    {
-        // The other side of the same coin, and the real reading on the first
-        // account tested: two posts on the profile, none findable.
-        $this->fake([['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 2]], 0);
-
-        $result = app(ShadowbanChecker::class)->check($this->account());
-
-        $this->assertSame('restricted', $result['detail']['search']);
-        $this->assertSame(2, $result['detail']['posts_total']);
-    }
-
-    #[Test]
-    public function an_unreadable_post_count_does_not_invent_the_alarming_answer(): void
-    {
-        // Guessing here would manufacture a shadowban out of a missing field.
-        $this->fake([['username' => 'nancy_2z', 'protected' => false]], 0);
-
-        $this->assertSame('unknown', app(ShadowbanChecker::class)->check($this->account())['detail']['search']);
+        $this->assertSame('ok', app(ShadowbanChecker::class)->check('nancy_2z')['state']);
     }
 
     #[Test]
     public function a_page_of_results_is_not_reported_as_a_total(): void
     {
         /*
-         * The count is a page. The response carries a next_cursor, and the raw
-         * JSON for a real account showed one -- so twenty means twenty-and-more,
-         * and the page was printing it as though the account had exactly that
-         * many findable posts.
+         * The count is a page. The raw JSON for a real handle carried a
+         * next_cursor, so twenty means twenty-and-more, and the page was
+         * printing it as though that were all there was.
          */
-        Http::fake([
-            'api.sorsa.io/v3/search-users' => Http::response([
-                'users' => [['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 119]],
-            ]),
-            'api.sorsa.io/v3/search-tweets' => Http::response([
-                'tweets' => array_fill(0, 20, ['id' => '1']),
-                'next_cursor' => 'DAADDAABCgAB',
-            ]),
-        ]);
+        $this->fake([$this->profile()], 20, 'DAADDAABCgAB');
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame(20, $result['detail']['posts_found']);
         $this->assertTrue($result['detail']['posts_more'], 'a page with more behind it was reported as the whole answer');
@@ -285,13 +232,10 @@ class ShadowbanCheckTest extends TestCase
         /*
          * is_replies_limited rides along on the posts the search already
          * returned, so it costs nothing -- and it is the one restriction
-         * neither of the other tests can see: X limiting who can read an
-         * account's replies shows up nowhere in whether its posts are findable.
+         * neither of the other tests can see.
          */
         Http::fake([
-            'api.sorsa.io/v3/search-users' => Http::response([
-                'users' => [['username' => 'nancy_2z', 'protected' => false, 'tweets_count' => 119]],
-            ]),
+            'api.sorsa.io/v3/search-users' => Http::response(['users' => [$this->profile()]]),
             'api.sorsa.io/v3/search-tweets' => Http::response([
                 'tweets' => [
                     ['id' => '1', 'is_replies_limited' => false],
@@ -301,12 +245,12 @@ class ShadowbanCheckTest extends TestCase
             ]),
         ]);
 
-        $result = app(ShadowbanChecker::class)->check($this->account());
+        $result = app(ShadowbanChecker::class)->check('nancy_2z');
 
         $this->assertSame('restricted', $result['detail']['replies']);
         $this->assertSame(1, $result['detail']['replies_limited']);
-        // And it drags the account's overall verdict with it, since the other
-        // two tests passing does not make a limited account unlimited.
+        // And it carries the verdict: two clean tests do not make a limited
+        // account unlimited.
         $this->assertSame('restricted', $result['state']);
     }
 
@@ -315,26 +259,9 @@ class ShadowbanCheckTest extends TestCase
     {
         /*
          * The response as the live API actually sent it for @MDN_Design,
-         * trimmed to the fields this reads. Frozen here because every earlier
-         * mistake in this file came from assuming a shape rather than looking
-         * at one: the count that turned out to be a page, and the reply flag
-         * that was sitting unread in every tweet.
+         * trimmed to the fields this reads. Frozen because every earlier
+         * mistake here came from assuming a shape rather than looking at one.
          */
-        $tweet = fn (bool $limited = false) => [
-            'id' => '2094682390765682991',
-            'full_text' => 'random meetup turned legendary',
-            'is_replies_limited' => $limited,
-            'is_reply' => false,
-            'view_count' => 26,
-            'user' => [
-                'username' => 'MDN_Design',
-                'tweets_count' => 119,
-                'protected' => false,
-                'possibly_sensitive' => false,
-                'verified' => false,
-            ],
-        ];
-
         Http::fake([
             'api.sorsa.io/v3/search-users' => Http::response([
                 'users' => [[
@@ -350,14 +277,16 @@ class ShadowbanCheckTest extends TestCase
                 'next_cursor' => '',
             ]),
             'api.sorsa.io/v3/search-tweets' => Http::response([
-                'tweets' => array_fill(0, 20, $tweet()),
-                // The cursor the real response carried, which is what makes the
-                // twenty a page rather than a total.
+                'tweets' => array_fill(0, 20, [
+                    'id' => '2094682390765682991',
+                    'is_replies_limited' => false,
+                    'view_count' => 26,
+                ]),
                 'next_cursor' => 'DAADDAABCgABHRHOiUrawS8KAAIc4Lpz3ptgKw',
             ]),
         ]);
 
-        $result = app(ShadowbanChecker::class)->check($this->account('MDN_Design'));
+        $result = app(ShadowbanChecker::class)->check('MDN_Design');
 
         $this->assertSame('ok', $result['state']);
         $this->assertSame('ok', $result['detail']['search']);
@@ -371,105 +300,163 @@ class ShadowbanCheckTest extends TestCase
         $this->assertFalse($result['detail']['sensitive']);
     }
 
+    // ── The list ──────────────────────────────────────────────────────────
+
     #[Test]
-    public function the_tiles_add_up_to_the_number_of_accounts(): void
+    public function a_pasted_list_becomes_rows_and_jobs(): void
     {
         /*
-         * They did not. pluck turns a null column into an empty-string key, so
-         * get('') and get(null) resolved to the same entry and adding them
-         * reported 2,046 unchecked accounts out of 1,026 -- a number larger
-         * than the pool, sitting on the page as a fact.
+         * The page is a list someone already has. Handles arrive as they were
+         * copied: bare, with an @, as a profile URL, in whatever case -- and
+         * all of those spellings are one handle, stored once.
          */
-        $this->fake([['username' => 'a', 'protected' => false, 'tweets_count' => 40]], 5);
+        Queue::fake();
 
-        $checked = $this->account('checked');
-        $this->account('never_checked_1');
-        $this->account('never_checked_2');
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/visibility', [
+                'handles' => ['nancy_2z', '@MDN_DESIGN', 'https://x.com/GoodingAngie', '  nancy_2z  '],
+            ])
+            ->assertStatus(202)
+            // The duplicate is one handle, not two.
+            ->assertJsonPath('added', 3)
+            ->assertJsonPath('invalid', []);
 
-        (new CheckAccountVisibility($checked->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+        $this->assertSame(
+            ['goodingangie', 'mdn_design', 'nancy_2z'],
+            VisibilityCheck::query()->orderBy('handle')->pluck('handle')->all(),
+        );
 
-        $body = $this->actingAs($this->user->refresh())
-            ->getJson('/api/v1/accounts/visibility/stats')
-            ->assertOk()
-            ->json();
+        Queue::assertPushed(CheckAccountVisibility::class, 3);
+    }
+
+    #[Test]
+    public function a_line_that_is_not_an_x_handle_is_named(): void
+    {
+        /*
+         * "38 of 40 added" leaves someone holding two lines they cannot find in
+         * a paste of forty -- the failure the proxy and link importers were
+         * built to avoid. X handles are word characters, at most fifteen.
+         */
+        Queue::fake();
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/visibility', [
+                'handles' => ['nancy_2z', 'has spaces', 'way_too_long_to_be_a_handle'],
+            ])
+            ->assertStatus(202)
+            ->assertJsonPath('added', 1)
+            ->assertJsonPath('invalid', ['has spaces', 'way_too_long_to_be_a_handle']);
+    }
+
+    #[Test]
+    public function adding_a_handle_already_on_the_list_keeps_its_last_verdict(): void
+    {
+        // Until the new check answers. Blanking it to "chưa kiểm tra" would
+        // throw away the only answer on the page while the queue works.
+        Queue::fake();
+
+        $this->row(['state' => 'restricted', 'checked_at' => now()->subHour()]);
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/visibility', ['handles' => ['@nancy_2z']])
+            ->assertStatus(202);
+
+        $this->assertSame(1, VisibilityCheck::query()->count());
+        $this->assertSame('restricted', VisibilityCheck::query()->sole()->state);
+    }
+
+    #[Test]
+    public function the_check_is_queued_rather_than_answered_inline(): void
+    {
+        /*
+         * Two Sorsa calls per handle at three to five seconds each, so a list
+         * of a hundred is minutes -- not something to hold an HTTP request
+         * open for.
+         */
+        Queue::fake();
+
+        $row = $this->row();
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/visibility/check', ['ids' => [$row->id]])
+            ->assertStatus(202)
+            ->assertJsonPath('queued', 1);
+
+        Queue::assertPushed(CheckAccountVisibility::class, 1);
+    }
+
+    #[Test]
+    public function without_a_key_handles_are_still_added_but_nothing_is_asked(): void
+    {
+        /*
+         * A column of blanks looks like every handle being fine. It is a
+         * missing setting, and the page has to be able to say which.
+         */
+        config(['xpost.links.sorsa.key' => null]);
+        Queue::fake();
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/visibility', ['handles' => ['nancy_2z']])
+            ->assertStatus(202)
+            ->assertJsonPath('added', 1)
+            ->assertJsonPath('queued', 0)
+            ->assertJsonPath('configured', false);
+
+        Queue::assertNothingPushed();
+
+        $this->actingAs($this->user->refresh())
+            ->postJson('/api/v1/visibility/check', ['ids' => [VisibilityCheck::query()->sole()->id]])
+            ->assertStatus(422);
+    }
+
+    #[Test]
+    public function the_verdict_is_stored_with_the_moment_it_was_reached(): void
+    {
+        // A verdict with no date is a claim about now made from whenever.
+        $this->fake([$this->profile()], 12);
+
+        $row = $this->row();
+
+        (new CheckAccountVisibility($row->id, $this->team->id))->handle(app(ShadowbanChecker::class));
+
+        $row->refresh();
+
+        $this->assertSame('ok', $row->state);
+        $this->assertNotNull($row->checked_at);
+        $this->assertSame(12, $row->detail['posts_found']);
+    }
+
+    #[Test]
+    public function the_tiles_add_up_to_the_list(): void
+    {
+        /*
+         * They once said 2,046 unchecked out of 1,026 -- a number larger than
+         * the list, sitting on the page as a fact. pluck turns a null column
+         * into an empty-string key, so reading it by name counted twice.
+         */
+        $this->row(['handle' => 'a', 'state' => 'ok', 'checked_at' => now()]);
+        $this->row(['handle' => 'b']);
+        $this->row(['handle' => 'c']);
+
+        $body = $this->actingAs($this->user->refresh())->getJson('/api/v1/visibility')->assertOk()->json();
 
         $this->assertSame(3, $body['total']);
         $this->assertSame(2, $body['by_state']['unchecked']);
-        $this->assertSame(3, array_sum($body['by_state']), 'the tiles do not add up to the pool');
+        $this->assertSame(3, array_sum($body['by_state']), 'the tiles do not add up to the list');
     }
 
     #[Test]
-    public function a_pasted_list_of_handles_queues_the_accounts_it_matches(): void
+    public function another_teams_handles_are_not_listed(): void
     {
-        /*
-         * The pool is a thousand accounts over twenty-one pages, and "check
-         * these forty" is a question about a list someone already has -- not
-         * about what happens to be on screen.
-         */
-        Queue::fake();
+        // The list is per team: two teams watching the same handle are two
+        // rows, and neither can see the other's verdict.
+        $this->row(['handle' => 'mine']);
 
-        $this->account('nancy_2z');
-        $this->account('MDN_Design');
+        [$other] = $this->tenant();
+        VisibilityCheck::query()->create(['team_id' => $other->id, 'handle' => 'theirs']);
 
-        $this->actingAs($this->user->refresh())
-            ->postJson('/api/v1/accounts/visibility', [
-                // People paste what they have: bare, with an @, or a whole URL,
-                // and in whatever case X showed it to them.
-                'usernames' => ['nancy_2z', '@MDN_DESIGN', 'https://x.com/nancy_2z'],
-            ])
-            ->assertStatus(202)
-            // The duplicate is one account, not two jobs.
-            ->assertJsonPath('queued', 2)
-            ->assertJsonPath('not_found', []);
+        $rows = $this->actingAs($this->user->refresh())->getJson('/api/v1/visibility')->assertOk()->json('data');
 
-        Queue::assertPushed(CheckAccountVisibility::class, 2);
-    }
-
-    #[Test]
-    public function handles_that_are_not_in_the_pool_are_named(): void
-    {
-        /*
-         * "38 of 40 queued" leaves someone holding two handles they cannot
-         * find in a paste of forty -- the same failure the proxy and link
-         * importers were built to avoid.
-         */
-        Queue::fake();
-
-        $this->account('nancy_2z');
-
-        $this->actingAs($this->user->refresh())
-            ->postJson('/api/v1/accounts/visibility', [
-                'usernames' => ['nancy_2z', 'somebody_else', 'another_stranger'],
-            ])
-            ->assertStatus(202)
-            ->assertJsonPath('queued', 1)
-            ->assertJsonPath('not_found', ['somebody_else', 'another_stranger']);
-    }
-
-    #[Test]
-    public function another_teams_handle_is_not_found_rather_than_checked(): void
-    {
-        // The paste is a list of strings from a browser, and matching on the
-        // name alone would reach across tenants.
-        Queue::fake();
-
-        XAccount::factory()->create(['username' => 'stranger_acct']);
-
-        $this->actingAs($this->user->refresh())
-            ->postJson('/api/v1/accounts/visibility', ['usernames' => ['stranger_acct']])
-            ->assertStatus(202)
-            ->assertJsonPath('queued', 0)
-            ->assertJsonPath('not_found', ['stranger_acct']);
-
-        Queue::assertNothingPushed();
-    }
-
-    #[Test]
-    public function asking_with_neither_a_selection_nor_a_list_is_refused(): void
-    {
-        // Silence here would read as "done" over an empty run.
-        $this->actingAs($this->user->refresh())
-            ->postJson('/api/v1/accounts/visibility', [])
-            ->assertStatus(422);
+        $this->assertSame(['mine'], array_column($rows, 'handle'));
     }
 }

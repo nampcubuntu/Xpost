@@ -11,7 +11,7 @@ import NavIcon from '../components/NavIcon.vue';
  * calls to Sorsa per account, so it runs on the queue and the verdicts arrive
  * after the click, the same way the proxy checks do.
  */
-const accounts = ref([]);
+const rows = ref([]);
 const meta = ref(null);
 const stats = ref(null);
 const page = ref(1);
@@ -21,32 +21,43 @@ const loading = ref(true);
 const busy = ref(false);
 const flash = ref(null);
 const selected = ref(new Set());
+const configured = ref(true);
 
 /*
- * The four checks, expanded under the row that was clicked.
+ * A list of handles, kept here rather than read off the account pool.
  *
- * Not four more columns: the table is already at its minimum width, and
- * two of the four are the account's own settings rather than anything X
- * imposed -- which is a distinction that needs a sentence, not a cell.
+ * The question is asked about names, and the useful ones include handles this
+ * install has never connected -- one being bought, one disconnected after it
+ * went quiet, a competitor. Requiring a connected account meant those could
+ * not be asked about at all.
  */
-const openFor = ref(null);
+const showPaste = ref(true);
+const pasteText = ref('');
 
+/** One per line, or comma separated, with or without the @ or a full URL. */
+const pastedHandles = computed(() => pasteText.value
+    .split(/[\n,;]+/)
+    .map((line) => line.trim())
+    .filter(Boolean));
+
+const openFor = ref(null);
 const toggleDetail = (id) => (openFor.value = openFor.value === id ? null : id);
 
 const states = [
     { value: '', label: 'Mọi trạng thái' },
     { value: 'ok', label: 'Bình thường' },
     { value: 'restricted', label: 'Bị hạn chế' },
-    { value: 'protected', label: 'Tài khoản riêng tư' },
+    { value: 'protected', label: 'Riêng tư' },
     { value: 'unknown', label: 'Chưa rõ' },
+    { value: 'unchecked', label: 'Chưa kiểm tra' },
 ];
 
 /*
  * Three states, never two.
  *
  * "Không phát hiện hạn chế" and "không hỏi được" are different answers, and
- * collapsing them is how a page reports a clean bill of health for an account
- * it never reached.
+ * collapsing them is how a page reports a clean bill of health for a handle it
+ * never reached.
  */
 const badge = {
     ok: { label: 'Bình thường', class: 'bg-green-50 text-green-700' },
@@ -67,31 +78,27 @@ async function load() {
     loading.value = cached(key) === undefined;
 
     try {
-        await swr(key, async () => (await api.get('accounts', {
+        await swr(key, async () => (await api.get('visibility', {
             params: {
                 search: search.value || undefined,
-                visibility: state.value || undefined,
+                state: state.value || undefined,
                 page: page.value,
                 per_page: 50,
             },
         })).data, (data) => {
-            accounts.value = data.data;
+            rows.value = data.data;
             meta.value = data.meta;
+            stats.value = { by_state: data.by_state, total: data.total };
+            configured.value = data.configured;
 
             // Drop ticks for rows that are gone, or the count in the bar
             // promises rows the next action cannot find.
-            const live = new Set(accounts.value.map((a) => a.id));
+            const live = new Set(rows.value.map((r) => r.id));
             selected.value = new Set([...selected.value].filter((id) => live.has(id)));
         });
     } finally {
         loading.value = false;
     }
-}
-
-async function loadStats() {
-    const { data } = await api.get('accounts/visibility/stats');
-
-    stats.value = data;
 }
 
 let timer;
@@ -103,123 +110,34 @@ watch([search, state], () => {
 watch(page, load);
 
 /*
- * The verdicts arrive on the queue, so the page asks again until they do.
+ * Verdicts arrive on the queue, so the page asks again until they do.
  *
- * This looked once, five seconds after the click, and then stopped. A check is
- * two calls to Sorsa and takes three to five seconds on its own, so the one
- * look routinely landed before the answer -- and the page then sat there,
- * saying results would appear, with nothing left that would ever fetch them.
+ * It once looked exactly once, five seconds after the click -- and a check
+ * takes three to five seconds on its own, so that look routinely landed before
+ * the answer and nothing was left that would ever fetch it.
  */
-/*
- * A pasted list, because the pool is a thousand accounts over twenty-one
- * pages and "check these forty" is a question about a list someone already
- * has -- not about what happens to be on screen.
- */
-const showPaste = ref(false);
-const pasteText = ref('');
-
-/** One per line, or comma separated, with or without the @ or a full URL. */
-const pastedHandles = computed(() => pasteText.value
-    .split(/[\n,;]+/)
-    .map((line) => line.trim())
-    .filter(Boolean));
-
-async function checkPasted() {
-    const usernames = pastedHandles.value;
-
-    if (! usernames.length) {
-        return;
-    }
-
-    busy.value = true;
-
-    try {
-        const { data } = await api.post('accounts/visibility', { usernames });
-
-        /*
-         * Named, not counted. "38 of 40" leaves someone holding two handles
-         * they cannot find, which is the failure the proxy and link importers
-         * were built to avoid.
-         */
-        flash.value = data.not_found.length
-            ? {
-                type: 'error',
-                message: `Đã xếp hàng ${data.queued} tài khoản. `
-                    + `${data.not_found.length} handle không có trong pool và được giữ lại trong ô: `
-                    + data.not_found.slice(0, 8).join(', ')
-                    + (data.not_found.length > 8 ? '…' : ''),
-            }
-            : {
-                type: 'ok',
-                message: `Đã xếp hàng ${data.queued} tài khoản. Mỗi tài khoản mất khoảng 3–5 giây; `
-                    + 'trang sẽ tự cập nhật khi có kết quả.',
-            };
-
-        // The unmatched ones stay in the box, alone, so they can be corrected
-        // and sent again rather than hunted for in the original paste.
-        pasteText.value = data.not_found.join('\n');
-        showPaste.value = data.not_found.length > 0;
-
-        awaiting.value = new Set();
-        pollUntilSettled();
-    } catch (error) {
-        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không kiểm tra được.' };
-    } finally {
-        busy.value = false;
-    }
-}
-
-const awaiting = ref(new Set());
 let poller;
 
-/** The "chưa kiểm tra" tile, watched so a pasted run knows when it stops moving. */
-const unchecked = computed(() => stats.value?.by_state?.unchecked ?? null);
-let lastUnchecked = null;
-
-/** Which of the accounts asked for still have no verdict from this round. */
-function stillWaiting() {
-    // A pasted list names handles, not ids, so there is nothing on the page
-    // to tick off -- the queue depth is what settles it, and the stats call
-    // already reports it as accounts leaving "chưa kiểm tra".
-    if (awaiting.value.size === 0) {
-        return unchecked.value !== lastUnchecked;
-    }
-
-    return accounts.value.some((a) => awaiting.value.has(a.id) && ! a.visibility_checked_at)
-        || [...awaiting.value].some((id) => ! accounts.value.find((a) => a.id === id));
-}
+const pending = computed(() => rows.value.filter((r) => ! r.checked_at).length);
 
 async function pollUntilSettled(attempt = 0) {
     clearTimeout(poller);
 
-    // Backing off rather than hammering: a sweep of a thousand takes minutes,
-    // and a page asking every two seconds for all of them is its own load.
+    // Backing off rather than hammering: a list of a hundred takes minutes.
     const wait = Math.min(2000 * 2 ** attempt, 15000);
 
     poller = setTimeout(async () => {
-        const before = unchecked.value;
+        await load();
 
-        await Promise.all([load(), loadStats()]);
-
-        lastUnchecked = before;
-
-        // Twenty rounds at the cap is about four minutes, which is longer than
-        // any single check takes. Past that something is wrong upstream and
-        // more polling will not find it.
-        if (stillWaiting() && attempt < 20 && ! document.hidden) {
+        // Twenty rounds at the cap is about four minutes. Past that the fault
+        // is upstream and more polling will not find it.
+        if (pending.value > 0 && attempt < 20 && ! document.hidden) {
             pollUntilSettled(attempt + 1);
-        } else {
-            awaiting.value = new Set();
         }
     }, wait);
 }
 
-onMounted(() => {
-    load();
-    loadStats();
-});
-
-// Or the page keeps asking for a list nobody is looking at any more.
+onMounted(load);
 onUnmounted(() => clearTimeout(poller));
 
 function toggle(id) {
@@ -227,34 +145,69 @@ function toggle(id) {
     selected.value = new Set(selected.value);
 }
 
-const allSelected = computed(() => accounts.value.length > 0
-    && accounts.value.every((a) => selected.value.has(a.id)));
+const allSelected = computed(() => rows.value.length > 0
+    && rows.value.every((r) => selected.value.has(r.id)));
 
 function toggleAll() {
     const clearing = allSelected.value;
 
-    accounts.value.forEach((a) => {
-        clearing ? selected.value.delete(a.id) : selected.value.add(a.id);
+    rows.value.forEach((r) => {
+        clearing ? selected.value.delete(r.id) : selected.value.add(r.id);
     });
 
     selected.value = new Set(selected.value);
 }
 
-async function check(ids) {
+/** Add handles to the list and check them in the same step. */
+async function addHandles() {
+    if (! pastedHandles.value.length) {
+        return;
+    }
+
     busy.value = true;
 
     try {
-        const { data } = await api.post('accounts/visibility', { account_ids: ids });
+        const { data } = await api.post('visibility', { handles: pastedHandles.value });
 
-        flash.value = {
-            type: 'ok',
-            message: `Đã đưa ${data.queued} tài khoản vào hàng đợi. `
-                + 'Mỗi tài khoản tốn 2 lượt gọi API và mất khoảng 3–5 giây. '
-                + 'Trang sẽ tự cập nhật khi có kết quả — không cần tải lại.',
-        };
+        /*
+         * Named, not counted. "38 of 40" leaves someone holding two lines they
+         * cannot find, which is the failure the proxy and link importers were
+         * built to avoid -- so the bad ones stay in the box, alone.
+         */
+        flash.value = data.invalid.length
+            ? {
+                type: 'error',
+                message: `Đã thêm ${data.added} handle. ${data.invalid.length} dòng không phải handle X hợp lệ `
+                    + '(chỉ chữ, số, gạch dưới, tối đa 15 ký tự) và được giữ lại trong ô.',
+            }
+            : {
+                type: 'ok',
+                message: data.configured
+                    ? `Đã thêm ${data.added} handle và đưa vào hàng đợi. Mỗi handle mất khoảng 3–5 giây; `
+                        + 'trang tự cập nhật khi có kết quả.'
+                    : `Đã thêm ${data.added} handle. Chưa có SORSA_API_KEY nên chưa kiểm tra được.`,
+            };
 
+        pasteText.value = data.invalid.join('\n');
+        await load();
+        pollUntilSettled();
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không thêm được.' };
+    } finally {
+        busy.value = false;
+    }
+}
+
+/** Ask again about rows already on the list. */
+async function recheck(ids) {
+    busy.value = true;
+
+    try {
+        const { data } = await api.post('visibility/check', { ids });
+
+        flash.value = { type: 'ok', message: `Đã đưa ${data.queued} handle vào hàng đợi.` };
         selected.value = new Set();
-        awaiting.value = new Set([...awaiting.value, ...ids]);
+        await load();
         pollUntilSettled();
     } catch (error) {
         flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không kiểm tra được.' };
@@ -263,6 +216,25 @@ async function check(ids) {
     }
 }
 
+async function remove(ids) {
+    if (! window.confirm(`Bỏ ${ids.length} handle khỏi danh sách theo dõi?`)) {
+        return;
+    }
+
+    busy.value = true;
+
+    try {
+        await api.delete('visibility', { data: { ids } });
+        selected.value = new Set();
+        await load();
+    } finally {
+        busy.value = false;
+    }
+}
+
+const checkedAt = (iso) => (iso
+    ? new Date(iso).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+    : null);
 /*
  * What each check means, in the account's own terms.
  *
@@ -270,8 +242,8 @@ async function check(ids) {
  * explains the first: a protected account cannot appear in search at all, so a
  * search ban reading on one is unmeasurable rather than positive.
  */
-function checks(account) {
-    const d = account.visibility_detail ?? {};
+function checks(row) {
+    const d = row.detail ?? {};
 
     return [
         {
@@ -347,10 +319,8 @@ const verdictClass = {
     restricted: 'bg-red-50 text-red-700 ring-1 ring-red-200',
     unknown: 'bg-amber-50 text-amber-800 ring-1 ring-amber-200',
 };
-const checkedAt = (iso) => (iso
-    ? new Date(iso).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
-    : null);
 </script>
+
 
 <template>
     <div class="px-5 py-5 lg:px-8 lg:py-6">
@@ -358,67 +328,59 @@ const checkedAt = (iso) => (iso
             <div>
                 <h1 class="text-xl font-semibold">Trạng thái hiển thị</h1>
                 <p class="mt-1 max-w-3xl text-[13px] text-neutral-500">
-                    X có đang âm thầm hạn chế tài khoản không. Không có API nào trả lời thẳng câu này,
+                    X có đang âm thầm hạn chế handle nào không. Không có API nào trả lời thẳng câu này,
                     nên bài kiểm tra được ghép từ hai lượt hỏi: handle có xuất hiện trong tìm kiếm người dùng,
                     và <code class="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[12px]">from:@handle</code>
-                    có trả về bài nào không.
+                    có trả về bài nào không. Handle nào cũng kiểm được — không cần nối vào Xpost.
                 </p>
             </div>
 
-            <div class="flex gap-2">
-                <button class="xp-btn-ghost" @click="showPaste = !showPaste">Dán danh sách</button>
-                <button
-                    class="xp-btn-primary"
-                    :disabled="busy || !selected.size"
-                    @click="check([...selected])"
-                >Kiểm tra {{ selected.size || '' }} tài khoản</button>
-            </div>
+            <button class="xp-btn-ghost" @click="showPaste = !showPaste">
+                {{ showPaste ? 'Ẩn ô thêm' : 'Thêm handle' }}
+            </button>
         </div>
 
         <div
-            v-if="stats && !stats.configured"
+            v-if="!configured"
             class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900"
         >
             <strong class="font-semibold">Chưa cấu hình SORSA_API_KEY.</strong>
-            Đặt khoá trong <code class="rounded bg-amber-100 px-1 py-0.5 font-mono">.env</code> rồi chạy
+            Thêm handle vẫn được, nhưng chưa kiểm tra được. Đặt khoá trong
+            <code class="rounded bg-amber-100 px-1 py-0.5 font-mono">.env</code> rồi chạy
             <code class="rounded bg-amber-100 px-1 py-0.5 font-mono">artisan config:clear</code>.
-            Mỗi tài khoản tốn 2 lượt gọi, nên một lượt quét cả pool bằng hai lần số tài khoản.
         </div>
 
         <!--
-            A list someone already has, rather than a hunt through the table.
-            The pool is a thousand accounts over twenty-one pages, and ticking
-            forty of them by hand is not a way to ask a question about forty.
+            The list someone already has. No hunt through a table, and no
+            requirement that the handle be a connected account.
         -->
         <div v-if="showPaste" class="xp-card mb-4 px-4 py-4">
             <label class="xp-label">Dán handle — mỗi dòng một cái, hoặc ngăn bằng dấu phẩy</label>
             <textarea
                 v-model="pasteText"
-                rows="6"
+                rows="5"
                 class="xp-field mt-1 w-full font-mono text-[12.5px]"
                 placeholder="nancy_2z&#10;@MDN_Design&#10;https://x.com/GoodingAngie"
             ></textarea>
             <p class="xp-hint mt-1">
                 Có hay không có <code>@</code> đều được, dán cả link hồ sơ cũng được.
-                Chỉ những handle đã có trong pool mới kiểm tra được — cái nào không thấy sẽ được nêu tên.
+                Thêm xong là kiểm luôn — mỗi handle tốn 2 lượt gọi API.
             </p>
 
-            <div class="mt-3 flex items-center gap-2">
-                <button
-                    class="xp-btn-primary"
-                    :disabled="busy || !pastedHandles.length"
-                    @click="checkPasted"
-                >Kiểm tra {{ pastedHandles.length || '' }} handle</button>
-                <button class="xp-btn-ghost" @click="showPaste = false">Đóng</button>
-            </div>
+            <button
+                class="xp-btn-primary mt-3"
+                :disabled="busy || !pastedHandles.length"
+                @click="addHandles"
+            >Thêm và kiểm tra {{ pastedHandles.length || '' }} handle</button>
         </div>
+
         <div v-if="flash" class="mb-4 rounded-lg px-4 py-3 text-[13px]"
              :class="flash.type === 'ok' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'">
             {{ flash.message }}
         </div>
 
-        <!-- Never checked is its own tile: it is not the same as checked and unclear. -->
-        <div v-if="stats" class="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <!-- Never checked is its own tile: not the same as checked and unclear. -->
+        <div v-if="stats && stats.total" class="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <div v-for="tile in [
                 { key: 'ok', label: 'Bình thường', tone: 'text-green-700' },
                 { key: 'restricted', label: 'Bị hạn chế', tone: 'text-red-700' },
@@ -435,12 +397,12 @@ const checkedAt = (iso) => (iso
         </div>
 
         <div class="mb-3 flex flex-wrap items-center gap-2">
-            <input v-model="search" type="search" class="xp-field max-w-xs" placeholder="Tìm @username…">
+            <input v-model="search" type="search" class="xp-field max-w-xs" placeholder="Tìm handle…">
             <select v-model="state" class="xp-field max-w-[190px]">
                 <option v-for="option in states" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
             <span v-if="meta" class="ml-auto text-[12.5px] tabular-nums text-neutral-500">
-                {{ meta.total.toLocaleString('vi-VN') }} tài khoản
+                {{ meta.total.toLocaleString('vi-VN') }} handle
             </span>
         </div>
 
@@ -449,26 +411,35 @@ const checkedAt = (iso) => (iso
             <button
                 class="rounded-md bg-white/10 px-2.5 py-1 transition hover:bg-white/20 disabled:opacity-40"
                 :disabled="busy"
-                @click="check([...selected])"
-            >Kiểm tra</button>
+                @click="recheck([...selected])"
+            >Kiểm tra lại</button>
+
+            <span class="h-5 w-px bg-white/20"></span>
+
+            <button
+                class="rounded-md px-2.5 py-1 text-red-300 transition hover:bg-red-500/20 hover:text-red-200 disabled:opacity-40"
+                :disabled="busy"
+                @click="remove([...selected])"
+            >Bỏ khỏi danh sách</button>
+
             <button class="ml-auto text-white/60 transition hover:text-white" @click="selected = new Set()">Bỏ chọn</button>
         </div>
 
         <div class="xp-card overflow-hidden">
             <div class="overflow-x-auto">
-                <table class="w-full min-w-[1180px] text-left text-[13px]">
+                <table class="w-full min-w-[1080px] text-left text-[13px]">
                     <thead class="border-b border-neutral-200 bg-neutral-50 text-xs uppercase tracking-wide text-neutral-500">
                         <tr>
                             <th class="w-10 py-2.5 pl-4 pr-1">
                                 <input type="checkbox" :checked="allSelected" class="align-middle" @change="toggleAll">
                             </th>
-                            <th class="px-4 py-2.5 font-medium">Tài khoản</th>
+                            <th class="px-4 py-2.5 font-medium">Handle</th>
                             <th class="px-4 py-2.5 font-medium">Kết luận</th>
                             <!--
-                                All four on the row. The first two are things X
-                                did; the last two are the account's own settings
-                                and are what explain the first two -- a private
-                                account cannot appear in search at all.
+                                The first three are things X did; the last two
+                                are settings the account chose, and are what
+                                explain the first three -- a private account
+                                cannot appear in search at all.
                             -->
                             <th class="px-4 py-2.5 font-medium">Tìm kiếm bài</th>
                             <th class="px-4 py-2.5 font-medium">Gợi ý handle</th>
@@ -481,129 +452,123 @@ const checkedAt = (iso) => (iso
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
                         <tr v-if="loading"><td colspan="10" class="px-4 py-8 text-center text-neutral-500">Đang tải…</td></tr>
-                        <tr v-else-if="!accounts.length"><td colspan="10" class="px-4 py-8 text-center text-neutral-500">Không có tài khoản nào.</td></tr>
-
-                        <template v-for="account in accounts" :key="account.id">
-                        <tr class="hover:bg-neutral-50"
-                            :class="selected.has(account.id) ? 'bg-neutral-50' : ''">
-                            <td class="w-10 py-2.5 pl-4 pr-1">
-                                <input type="checkbox" :checked="selected.has(account.id)" class="align-middle" @change="toggle(account.id)">
+                        <tr v-else-if="!rows.length">
+                            <td colspan="10" class="px-4 py-10 text-center">
+                                <p class="text-[13px] text-neutral-600">Chưa có handle nào trong danh sách.</p>
+                                <p class="mt-1 text-[12.5px] text-neutral-500">Dán handle vào ô phía trên để bắt đầu theo dõi.</p>
                             </td>
-                            <td class="cursor-pointer px-4 py-2.5" @click="toggleDetail(account.id)">
+                        </tr>
+
+                        <template v-for="row in rows" :key="row.id">
+                        <tr class="hover:bg-neutral-50" :class="selected.has(row.id) ? 'bg-neutral-50' : ''">
+                            <td class="w-10 py-2.5 pl-4 pr-1">
+                                <input type="checkbox" :checked="selected.has(row.id)" class="align-middle" @change="toggle(row.id)">
+                            </td>
+                            <td class="cursor-pointer px-4 py-2.5" @click="toggleDetail(row.id)">
                                 <p class="flex items-center gap-1.5 font-medium">
                                     <NavIcon
                                         name="chevron"
                                         :size="12"
                                         class="text-neutral-400 transition"
-                                        :class="openFor === account.id ? 'rotate-180' : '-rotate-90'"
+                                        :class="openFor === row.id ? 'rotate-180' : '-rotate-90'"
                                     />
-                                    {{ account.handle }}
+                                    @{{ row.handle }}
                                 </p>
-                                <p class="truncate text-xs text-neutral-500">{{ account.name }}</p>
                             </td>
                             <td class="px-4 py-2.5">
-                                <span v-if="account.visibility_state"
+                                <span v-if="row.state"
                                       class="rounded-full px-2 py-0.5 text-xs font-medium"
-                                      :class="badge[account.visibility_state]?.class">
-                                    {{ badge[account.visibility_state]?.label ?? account.visibility_state }}
+                                      :class="badge[row.state]?.class">
+                                    {{ badge[row.state]?.label ?? row.state }}
                                 </span>
                                 <span v-else class="text-xs text-neutral-400">chưa kiểm tra</span>
                             </td>
 
-                            <!-- The two tests, spelled out. A one-word verdict
-                                 nobody can check is a verdict nobody trusts. -->
                             <td class="px-4 py-2.5">
-                                <span v-if="account.visibility_detail?.search"
-                                      :class="testLabel[account.visibility_detail.search]?.class">
-                                    {{ testLabel[account.visibility_detail.search]?.text }}
-                                    <!-- 20 with a cursor behind it is 20+, and
-                                         the column was printing it as a total
-                                         the same way the sentence used to. -->
-                                    <span v-if="account.visibility_detail.posts_found !== null" class="text-neutral-400">
-                                        ({{ account.visibility_detail.posts_found }}{{ account.visibility_detail.posts_more ? '+' : '' }} bài)
+                                <span v-if="row.detail?.search" :class="testLabel[row.detail.search]?.class">
+                                    {{ testLabel[row.detail.search]?.text }}
+                                    <!-- 20 with a cursor behind it is 20+, so
+                                         the column must not print it as a total. -->
+                                    <span v-if="row.detail.posts_found !== null" class="text-neutral-400">
+                                        ({{ row.detail.posts_found }}{{ row.detail.posts_more ? '+' : '' }} bài)
                                     </span>
                                 </span>
                                 <span v-else class="text-neutral-300">—</span>
                             </td>
                             <td class="px-4 py-2.5">
-                                <span v-if="account.visibility_detail?.search_suggestion"
-                                      :class="testLabel[account.visibility_detail.search_suggestion]?.class">
-                                    {{ testLabel[account.visibility_detail.search_suggestion]?.text }}
+                                <span v-if="row.detail?.search_suggestion" :class="testLabel[row.detail.search_suggestion]?.class">
+                                    {{ testLabel[row.detail.search_suggestion]?.text }}
                                 </span>
                                 <span v-else class="text-neutral-300">—</span>
                             </td>
-
                             <td class="px-4 py-2.5">
-                                <span v-if="account.visibility_detail?.replies"
-                                      :class="testLabel[account.visibility_detail.replies]?.class">
-                                    {{ testLabel[account.visibility_detail.replies]?.text }}
+                                <span v-if="row.detail?.replies" :class="testLabel[row.detail.replies]?.class">
+                                    {{ testLabel[row.detail.replies]?.text }}
                                 </span>
                                 <span v-else class="text-neutral-300">—</span>
                             </td>
 
-                            <!--
-                                A setting reads yes/no, not detected/clear: it is
-                                something the account chose, and calling it a
-                                restriction would send someone looking for
-                                something X never did.
-                            -->
+                            <!-- A setting reads yes/no, not detected/clear: it is
+                                 something the account chose, and calling it a
+                                 restriction sends someone looking for something
+                                 X never did. -->
                             <td class="border-l border-neutral-200 px-4 py-2.5">
-                                <span v-if="account.visibility_detail?.sensitive === true" class="font-medium text-amber-700">CÓ</span>
-                                <span v-else-if="account.visibility_detail?.sensitive === false" class="text-neutral-500">không</span>
+                                <span v-if="row.detail?.sensitive === true" class="font-medium text-amber-700">CÓ</span>
+                                <span v-else-if="row.detail?.sensitive === false" class="text-neutral-500">không</span>
                                 <span v-else class="text-neutral-300">—</span>
                             </td>
                             <td class="px-4 py-2.5">
-                                <span v-if="account.visibility_detail?.protected === true" class="font-medium text-blue-700">CÓ</span>
-                                <span v-else-if="account.visibility_detail?.protected === false" class="text-neutral-500">công khai</span>
+                                <span v-if="row.detail?.protected === true" class="font-medium text-blue-700">CÓ</span>
+                                <span v-else-if="row.detail?.protected === false" class="text-neutral-500">công khai</span>
                                 <span v-else class="text-neutral-300">—</span>
                             </td>
 
                             <!-- A verdict with no date is a claim about now made
                                  from whenever. -->
                             <td class="whitespace-nowrap px-4 py-2.5 text-[12.5px] text-neutral-600">
-                                {{ checkedAt(account.visibility_checked_at) ?? '—' }}
+                                {{ checkedAt(row.checked_at) ?? '—' }}
                             </td>
                             <td class="px-4 py-2.5 text-right">
                                 <button
                                     class="rounded-md border border-neutral-200 px-2.5 py-1 text-[12.5px] text-neutral-700 transition hover:border-neutral-300 hover:bg-neutral-50 disabled:opacity-50"
                                     :disabled="busy"
-                                    @click="check([account.id])"
+                                    @click="recheck([row.id])"
                                 >Kiểm tra</button>
                             </td>
                         </tr>
 
                         <!--
-                            All four checks, grouped the way they actually
-                            differ: two are things X did, two are the account's
-                            own settings -- and the second pair is what explains
-                            the first, since a private account cannot appear in
-                            search at all.
+                            All five checks, grouped the way they actually
+                            differ: three are things X did, two are settings the
+                            account chose -- and the second pair is what
+                            explains the first, since a private account cannot
+                            appear in search at all.
                         -->
-                        <tr v-if="openFor === account.id">
+                        <tr v-if="openFor === row.id">
                             <td colspan="10" class="bg-neutral-50 px-4 py-3">
-                                <p v-if="!account.visibility_checked_at" class="text-[13px] text-neutral-500">
-                                    Chưa kiểm tra tài khoản này lần nào.
+                                <p v-if="!row.checked_at" class="text-[13px] text-neutral-500">
+                                    Chưa kiểm tra handle này lần nào.
                                 </p>
 
                                 <div v-else class="max-w-3xl overflow-hidden rounded-lg border border-neutral-200 bg-white">
-                                    <template v-for="(row, i) in checks(account)" :key="row.title">
+                                    <template v-for="(check, i) in checks(row)" :key="check.title">
                                         <p
-                                            v-if="i === 0 || checks(account)[i - 1].group !== row.group"
+                                            v-if="i === 0 || checks(row)[i - 1].group !== check.group"
                                             class="border-b border-neutral-100 bg-neutral-50 px-4 py-1.5 text-[11px] uppercase tracking-wide text-neutral-500"
-                                        >{{ row.group }}</p>
+                                        >{{ check.group }}</p>
 
                                         <div class="flex items-start gap-3 border-b border-neutral-100 px-4 py-2.5 last:border-b-0">
                                             <div class="min-w-0 flex-1">
-                                                <p class="text-[13px] font-medium">{{ row.title }}</p>
+                                                <p class="text-[13px] font-medium">{{ check.title }}</p>
                                                 <p class="mt-0.5 text-[12.5px] leading-relaxed text-neutral-600">
-                                                    {{ row.say[row.state] ?? 'Chưa có dữ liệu.' }}
+                                                    {{ check.say[check.state] ?? 'Chưa có dữ liệu.' }}
                                                 </p>
                                             </div>
 
                                             <span
                                                 class="shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium"
-                                                :class="verdictClass[row.state] ?? verdictClass.unknown"
-                                            >{{ verdictWord[row.group][row.state] ?? 'Chưa rõ' }}</span>
+                                                :class="verdictClass[check.state] ?? verdictClass.unknown"
+                                            >{{ verdictWord[check.group][check.state] ?? 'Chưa rõ' }}</span>
                                         </div>
                                     </template>
                                 </div>

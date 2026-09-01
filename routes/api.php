@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\PostScheduleController;
 use App\Http\Controllers\Api\ProxyController;
 use App\Http\Controllers\Api\ProxyGroupController;
 use App\Http\Controllers\Api\TimezoneController;
+use App\Http\Controllers\Api\VisibilityController;
 use App\Http\Controllers\Api\XAppController;
 use Illuminate\Support\Facades\Route;
 
@@ -88,8 +89,10 @@ Route::prefix('v1')->group(function (): void {
             Route::get('accounts/{account}/ads-accounts', [AccountController::class, 'adsAccounts']);
             Route::apiResource('accounts', AccountController::class)->except(['store']);
 
-            Route::post('accounts/visibility', [AccountController::class, 'checkVisibility']);
-            Route::get('accounts/visibility/stats', [AccountController::class, 'visibilityStats']);
+            Route::get('visibility', [VisibilityController::class, 'index']);
+            Route::post('visibility', [VisibilityController::class, 'store']);
+            Route::post('visibility/check', [VisibilityController::class, 'check']);
+            Route::delete('visibility', [VisibilityController::class, 'destroy']);
             Route::apiResource('account-groups', AccountGroupController::class)->except(['show']);
             Route::post('account-groups/{account_group}/sync', [AccountGroupController::class, 'sync']);
 

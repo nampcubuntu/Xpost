@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\X;
 
-use App\Models\XAccount;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -44,13 +43,18 @@ final class ShadowbanChecker
     }
 
     /**
-     * One account, as far as two requests can tell.
+     * One handle, as far as two requests can tell.
+     *
+     * A handle rather than an account: the question "is X limiting this" is
+     * asked about names, and the useful ones include accounts not connected to
+     * this install at all -- a competitor, a handle being bought, one that was
+     * disconnected after it went quiet.
      *
      * @return array{state: string, checked_at: string, detail: array<string, mixed>}
      */
-    public function check(XAccount $account): array
+    public function check(string $handle): array
     {
-        $handle = ltrim((string) $account->username, '@');
+        $handle = ltrim(trim($handle), '@');
 
         $profile = $this->searchUsers($handle);
         $posts = $this->searchTweets($handle);

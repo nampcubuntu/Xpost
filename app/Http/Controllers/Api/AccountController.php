@@ -9,12 +9,10 @@ use App\Enums\CredentialType;
 use App\Exceptions\XApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\XAccountResource;
-use App\Jobs\CheckAccountVisibility;
 use App\Jobs\RefreshAccountToken;
 use App\Models\AccountGroup;
 use App\Models\XAccount;
 use App\Services\Proxies\ProxyAssigner;
-use App\Services\X\ShadowbanChecker;
 use App\Services\X\TimezoneGuesser;
 use App\Services\X\XAdsAccountLister;
 use App\Services\X\XAppSelector;
@@ -22,7 +20,6 @@ use App\Support\TeamContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 class AccountController extends Controller
@@ -43,10 +40,6 @@ class AccountController extends Controller
                 fn ($g) => $g->where('account_groups.id', $id)
             ))
             ->when($request->boolean('needs_reauth'), fn ($q) => $q->where('status', AccountStatus::NeedsReauth->value))
-            // Filtered here rather than in the browser: a pool of a thousand
-            // shows fifty at a time, and "the restricted ones" is a question
-            // about the pool.
-            ->when($request->query('visibility'), fn ($q, $v) => $q->where('visibility_state', $v))
             // The accounts still leaving from the server's own IP, which is the
             // set the proxy picker is nearly always after.
             ->when($request->boolean('without_proxy'), fn ($q) => $q->whereNull('proxy_id'))
@@ -299,117 +292,6 @@ class AccountController extends Controller
     }
 
     /** Counts for the sidebar badges, in one query instead of six. */
-    /**
-     * Whether X is limiting these accounts, asked now.
-     *
-     * Queued rather than answered inline: the check is two Sorsa calls per
-     * account against a flat twenty requests a second, so a thousand accounts
-     * is a hundred seconds at best. The page marks them queued and watches the
-     * verdicts arrive, the same way the proxy checks do.
-     */
-    public function checkVisibility(Request $request, ShadowbanChecker $checker): JsonResponse
-    {
-        $this->authorize('create', XAccount::class);
-
-        if (! $checker->isConfigured()) {
-            return response()->json([
-                'message' => 'Chưa cấu hình SORSA_API_KEY trong .env, nên không kiểm tra được.',
-            ], 422);
-        }
-
-        /*
-         * Ticked rows, or a pasted list of handles.
-         *
-         * The list is there because the pool is a thousand accounts over
-         * twenty-one pages, and "check these forty" is a question about a list
-         * someone already has -- not about what happens to be on screen.
-         */
-        $data = $request->validate([
-            'account_ids' => ['array', 'max:10000'],
-            'account_ids.*' => ['integer'],
-            'usernames' => ['array', 'max:10000'],
-            'usernames.*' => ['string', 'max:64'],
-        ]);
-
-        $handles = collect($data['usernames'] ?? [])
-            // People paste what they have: @handle, a profile URL, a column
-            // from a spreadsheet. The column stores them bare.
-            ->map(fn (string $raw) => strtolower(trim(ltrim(trim($raw), '@'))))
-            ->map(fn (string $h) => str_contains($h, '/') ? strtolower(basename(parse_url($h, PHP_URL_PATH) ?: $h)) : $h)
-            ->filter()
-            ->unique()
-            ->values();
-
-        if (($data['account_ids'] ?? []) === [] && $handles->isEmpty()) {
-            return response()->json(['message' => 'Chưa chọn tài khoản nào và cũng chưa dán handle nào.'], 422);
-        }
-
-        $queued = 0;
-        $found = [];
-
-        XAccount::query()
-            ->where(function ($q) use ($data, $handles): void {
-                $q->when($data['account_ids'] ?? [], fn ($w, $ids) => $w->orWhereIn('id', $ids))
-                    ->when($handles->isNotEmpty(), fn ($w) => $w->orWhereIn(
-                        DB::raw('LOWER(username)'), $handles->all()
-                    ));
-            })
-            // Chunked so ten thousand ids do not become one query the size of
-            // the selection.
-            ->chunkById(500, function ($accounts) use (&$queued, &$found): void {
-                foreach ($accounts as $account) {
-                    CheckAccountVisibility::dispatch($account->id, $account->team_id);
-                    $found[] = strtolower((string) $account->username);
-                    $queued++;
-                }
-            });
-
-        /*
-         * Named, not counted. "38 of 40 queued" leaves someone holding two
-         * handles they cannot find -- the same failure the proxy and link
-         * importers were built to avoid.
-         */
-        return response()->json([
-            'queued' => $queued,
-            'not_found' => $handles->reject(fn (string $h) => in_array($h, $found, true))->values(),
-        ], 202);
-    }
-
-    /** The pool's visibility at a glance, for the banner on the page. */
-    public function visibilityStats(ShadowbanChecker $checker): JsonResponse
-    {
-        $this->authorize('viewAny', XAccount::class);
-
-        $byState = XAccount::query()
-            ->selectRaw('visibility_state, COUNT(*) as aggregate')
-            ->groupBy('visibility_state')
-            ->pluck('aggregate', 'visibility_state');
-
-        $known = ['ok', 'restricted', 'protected', 'unknown'];
-
-        $counts = [];
-
-        foreach ($known as $state) {
-            $counts[$state] = (int) $byState->get($state, 0);
-        }
-
-        /*
-         * Never asked, counted as what is left rather than by key.
-         *
-         * pluck turns a null column into an empty-string key, so get('') and
-         * get(null) both resolve to the same entry -- and adding them reported
-         * 2,046 unchecked accounts out of 1,026. Subtracting from the total
-         * cannot double count whatever the driver decides to call null.
-         */
-        $counts['unchecked'] = max(0, (int) $byState->sum() - array_sum($counts));
-
-        return response()->json([
-            'configured' => $checker->isConfigured(),
-            'total' => (int) $byState->sum(),
-            'by_state' => $counts,
-        ]);
-    }
-
     public function stats(): JsonResponse
     {
         $this->authorize('viewAny', XAccount::class);

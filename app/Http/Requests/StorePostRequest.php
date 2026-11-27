@@ -160,11 +160,30 @@ class StorePostRequest extends FormRequest
             'variant_strategy' => $this->input('variant_strategy', VariantStrategy::Same->value),
             'schedule_mode' => $this->input('schedule_mode', ScheduleMode::Immediate->value),
             'timezone' => $timezone,
+            // The website control shows `https://` outside the editable area.
+            // Normalising here keeps API clients and older browser drafts from
+            // failing validation just because they sent the visible hostname.
+            'website_url' => $this->normaliseWebsiteUrl($this->input('website_url')),
 
             // The hour the user typed means nothing without knowing whose clock
             // it was on; resolve it before the `after_or_equal:now` rule reads it.
             'scheduled_at' => WallClock::toAppTimezone($this->input('scheduled_at'), $timezone),
             'window_ends_at' => WallClock::toAppTimezone($this->input('window_ends_at'), $timezone),
         ]);
+    }
+
+    private function normaliseWebsiteUrl(mixed $value): mixed
+    {
+        if (! is_string($value)) {
+            return $value;
+        }
+
+        $url = trim($value);
+
+        if ($url === '' || preg_match('/^https?:\/\//i', $url) === 1) {
+            return $url;
+        }
+
+        return 'https://'.$url;
     }
 }

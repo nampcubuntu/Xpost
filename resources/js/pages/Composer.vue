@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { useComposerStore } from '../stores/composer';
+import { normalizeWebsiteUrl, useComposerStore } from '../stores/composer';
 import { useAuthStore } from '../stores/auth';
 import { validationErrors } from '../lib/api';
 import PhonePreview from '../components/PhonePreview.vue';
@@ -94,6 +94,18 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus));
 
 const hasDestination = computed(() => post.value.destination_type !== 'none');
 const canPublish = computed(() => composer.hasContent && !composer.overLimit && !composer.saving);
+
+/*
+ * The input deliberately exposes only the editable hostname/path: `https://`
+ * is a fixed affordance beside it. Pasting a complete URL must work too, and
+ * the stored value must always remain complete for previews and API calls.
+ */
+const websiteUrlInput = computed({
+    get: () => String(post.value.website_url ?? '').replace(/^https?:\/\//i, ''),
+    set: (value) => {
+        post.value.website_url = normalizeWebsiteUrl(value);
+    },
+});
 
 const destinations = [
     { value: 'website', title: 'Website', hint: 'Include a call to action to your website.' },
@@ -508,8 +520,20 @@ function uploadedOn(item) {
                             :class="fieldError('website_url') ? 'border-red-500' : 'border-neutral-300'"
                         >
                             <span class="border-r border-neutral-200 bg-neutral-50 px-3 py-1.5 text-[13px] leading-[17px] text-neutral-500">https://</span>
-                            <input id="post-url" v-model="post.website_url" type="text" class="min-w-0 flex-1 px-3 py-1.5 text-[13px] leading-[17px] outline-none" placeholder="example.com">
+                            <input
+                                id="post-url"
+                                v-model="websiteUrlInput"
+                                type="text"
+                                inputmode="url"
+                                autocomplete="url"
+                                autocapitalize="none"
+                                spellcheck="false"
+                                class="min-w-0 flex-1 px-3 py-1.5 text-[13px] leading-[17px] outline-none"
+                                placeholder="example.com/video"
+                                aria-describedby="post-url-hint"
+                            >
                         </div>
+                        <p id="post-url-hint" class="mt-1 text-[11.5px] text-neutral-500">Nhập domain hoặc dán URL đầy đủ; https:// được thêm tự động.</p>
                         <p v-if="fieldError('website_url')" class="mt-1 text-[11.5px] text-red-600">{{ fieldError('website_url') }}</p>
                     </div>
 

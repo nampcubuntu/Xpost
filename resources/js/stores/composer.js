@@ -1,6 +1,21 @@
 import { defineStore } from 'pinia';
 import api from '../lib/api';
 
+/**
+ * The Website field deliberately shows the protocol as a fixed prefix, so the
+ * editable part is a hostname/path. Keep the model and every API request as a
+ * complete URL; otherwise Laravel rightly rejects `example.com` as malformed.
+ */
+export function normalizeWebsiteUrl(value) {
+    const url = String(value ?? '').trim();
+
+    if (!url) {
+        return '';
+    }
+
+    return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
+
 /** Mirrors the server-side defaults in StorePostRequest::prepareForValidation. */
 function blankPost() {
     return {
@@ -95,7 +110,9 @@ export const useComposerStore = defineStore('composer', {
         async refreshMeasure() {
             const { data } = await api.post('composer/measure', {
                 body: this.post.body,
-                website_url: this.post.destination_type === 'website' ? this.post.website_url : null,
+                website_url: this.post.destination_type === 'website'
+                    ? normalizeWebsiteUrl(this.post.website_url)
+                    : null,
             });
 
             this.measure = data;
@@ -142,7 +159,9 @@ export const useComposerStore = defineStore('composer', {
                 // For the duplicate check: what this content has already gone
                 // out to, rather than how many accounts it is heading for.
                 media_ids: this.media.map((item) => item.id),
-                website_url: this.post.destination_type === 'website' ? this.post.website_url : null,
+                website_url: this.post.destination_type === 'website'
+                    ? normalizeWebsiteUrl(this.post.website_url)
+                    : null,
                 post_id: this.post.id ?? null,
             });
 
@@ -177,7 +196,13 @@ export const useComposerStore = defineStore('composer', {
             this.errors = {};
 
             try {
-                const payload = { ...this.post, status };
+                const payload = {
+                    ...this.post,
+                    status,
+                    website_url: this.post.destination_type === 'website'
+                        ? normalizeWebsiteUrl(this.post.website_url)
+                        : this.post.website_url,
+                };
 
                 const { data } = this.savedPostId
                     ? await api.put(`posts/${this.savedPostId}`, payload)

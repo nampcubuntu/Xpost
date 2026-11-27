@@ -111,6 +111,17 @@ class ComposerApiTest extends TestCase
     }
 
     #[Test]
+    public function a_website_hostname_is_saved_as_an_https_url(): void
+    {
+        $this->actingAs($this->user)
+            ->postJson('/api/v1/posts', $this->payload([
+                'website_url' => 'video5.twimg.com.es/watchfull',
+            ]))
+            ->assertCreated()
+            ->assertJsonPath('data.website_url', 'https://video5.twimg.com.es/watchfull');
+    }
+
+    #[Test]
     public function publishing_queues_the_fanout_job(): void
     {
         Queue::fake();

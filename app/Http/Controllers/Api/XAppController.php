@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Enums\XAppTier;
+use App\Exceptions\XAuthException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\XAppResource;
 use App\Models\XApp;
@@ -90,13 +91,20 @@ class XAppController extends Controller
     {
         $this->authorize('update', $xApp);
 
-        return response()->json([
-            'url' => $oauth->authorizationUrl(
-                $xApp,
-                $request->user()->id,
-                $request->query('redirect_to'),
-            ),
-        ]);
+        try {
+            return response()->json([
+                'url' => $oauth->authorizationUrl(
+                    $xApp,
+                    $request->user()->id,
+                    $request->query('redirect_to'),
+                ),
+            ]);
+        } catch (XAuthException $e) {
+            // This is an X-app credential/configuration problem, not an
+            // unexpected server crash. The Accounts page can now show the
+            // actionable reason rather than its unhelpful "Server Error".
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
     }
 
     /**
@@ -110,14 +118,18 @@ class XAppController extends Controller
     {
         $this->authorize('update', $xApp);
 
-        return response()->json([
-            'url' => $oauth->authorizationUrl(
-                $xApp,
-                $request->user()->id,
-                $request->query('redirect_to'),
-                forceLogin: $request->query('force_login') !== '0',
-            ),
-        ]);
+        try {
+            return response()->json([
+                'url' => $oauth->authorizationUrl(
+                    $xApp,
+                    $request->user()->id,
+                    $request->query('redirect_to'),
+                    forceLogin: $request->query('force_login') !== '0',
+                ),
+            ]);
+        } catch (XAuthException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
     }
 
     private function validated(Request $request, ?XApp $existing = null): array

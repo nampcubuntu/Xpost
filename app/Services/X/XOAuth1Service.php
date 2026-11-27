@@ -81,6 +81,14 @@ final class XOAuth1Service
         ])->asForm()->post(self::REQUEST_TOKEN_URL);
 
         if ($response->failed()) {
+            if ($response->unauthorized()) {
+                throw new XAuthException(
+                    'X không xác thực được Consumer Key/Secret của app "'.$app->name
+                    .'". Kiểm tra lại API Key và API Key Secret (OAuth 1.0a) trong X Developer Portal, '
+                    .'sau đó lưu lại tại X Apps.'
+                );
+            }
+
             throw new XAuthException('Xin request token thất bại: '.$response->body());
         }
 

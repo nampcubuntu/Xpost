@@ -110,6 +110,26 @@ class XOAuth1ConnectTest extends TestCase
     }
 
     #[Test]
+    public function invalid_oauth1_app_credentials_are_reported_to_the_accounts_page(): void
+    {
+        $this->fakeX([
+            'api.x.com/oauth/request_token' => Http::response([
+                'errors' => [['code' => 32, 'message' => 'Could not authenticate you.']],
+            ], 401),
+        ]);
+
+        $this->actingAs($this->user)
+            ->getJson("/api/v1/apps/{$this->xApp->id}/authorize-url-oauth1")
+            ->assertUnprocessable()
+            ->assertJsonPath(
+                'message',
+                'X không xác thực được Consumer Key/Secret của app "'.$this->xApp->name
+                .'". Kiểm tra lại API Key và API Key Secret (OAuth 1.0a) trong X Developer Portal, '
+                .'sau đó lưu lại tại X Apps.'
+            );
+    }
+
+    #[Test]
     public function connecting_many_accounts_forces_the_login_screen(): void
     {
         /*

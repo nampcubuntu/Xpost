@@ -31,6 +31,8 @@ const selected = ref(new Set());
 const allSelected = computed(() =>
     accounts.value.length > 0 && accounts.value.every((a) => selected.value.has(a.id)),
 );
+const matchingAccountCount = computed(() => meta.value?.total ?? 0);
+const canManageAccounts = computed(() => auth.canManage);
 
 const badgeClass = {
     active: 'bg-green-50 text-green-700',
@@ -61,6 +63,71 @@ async function load() {
         stats.value = statsResponse.data;
     } finally {
         loading.value = false;
+    }
+}
+
+/**
+ * Select every account matching the filters, not merely the 50 rows currently
+ * visible. The bulk endpoint deliberately caps a request at 10,000 ids, so a
+ * larger pool must first be narrowed with a search, status, or group filter.
+ */
+async function selectAllMatching() {
+    const expected = matchingAccountCount.value;
+
+    if (!expected) {
+        return;
+    }
+
+    if (expected > 10_000) {
+        flash.value = {
+            type: 'error',
+            message: 'Có hơn 10.000 tài khoản khớp. Hãy lọc hẹp hơn trước khi thao tác hàng loạt.',
+        };
+        return;
+    }
+
+    busy.value = true;
+    flash.value = null;
+
+    try {
+        const ids = [];
+        let selectionPage = 1;
+        let lastPage = 1;
+
+        do {
+            const { data } = await api.get('accounts', {
+                params: {
+                    search: search.value || undefined,
+                    status: status.value || undefined,
+                    group_id: groupFilter.value || undefined,
+                    page: selectionPage,
+                    per_page: 200,
+                },
+            });
+
+            ids.push(...data.data.map((account) => account.id));
+            lastPage = data.meta?.last_page ?? selectionPage;
+            selectionPage += 1;
+        } while (selectionPage <= lastPage);
+
+        // Do not leave a partial selection behind if another person changed
+        // the pool while these pages were being read.
+        if (ids.length !== expected) {
+            selected.value = new Set();
+            flash.value = {
+                type: 'error',
+                message: 'Danh sách tài khoản vừa thay đổi. Hãy thử chọn tất cả lại.',
+            };
+            await load();
+            return;
+        }
+
+        selected.value = new Set(ids);
+        flash.value = { type: 'ok', message: `Đã chọn ${ids.length.toLocaleString('vi-VN')} tài khoản khớp bộ lọc.` };
+    } catch (error) {
+        flash.value = { type: 'error', message: error.response?.data?.message ?? 'Không thể chọn tất cả tài khoản.' };
+    } finally {
+        busy.value = false;
     }
 }
 
@@ -228,7 +295,12 @@ async function runBulk(action, extra = {}) {
          * A spread that ran out of proxies has to say so. "Đã áp dụng cho 500"
          * on accounts that still share one IP is the wrong kind of true.
          */
-        flash.value = data.unassigned
+        flash.value = action === 'delete'
+            ? {
+                type: 'ok',
+                message: `Đã xóa ${data.affected.toLocaleString('vi-VN')} tài khoản khỏi pool. Bài đăng, proxy và X App vẫn được giữ nguyên.`,
+            }
+            : data.unassigned
             ? {
                 type: 'error',
                 message: `Đã gán cho ${data.affected - data.unassigned} tài khoản. `
@@ -242,6 +314,32 @@ async function runBulk(action, extra = {}) {
     } finally {
         busy.value = false;
     }
+}
+
+function deleteSelectedAccounts() {
+    const count = selected.value.size;
+
+    if (!count) {
+        return;
+    }
+
+    const phrase = `DELETE ${count}`;
+    const confirmed = window.prompt(
+        `Bạn sắp xóa ${count.toLocaleString('vi-VN')} tài khoản khỏi pool hiện tại.\n\n`
+            + 'Bài đăng, proxy và X App không bị xóa.\n\n'
+            + `Nhập chính xác ${phrase} để xác nhận.`,
+    );
+
+    if (confirmed === null) {
+        return;
+    }
+
+    if (confirmed.trim() !== phrase) {
+        flash.value = { type: 'error', message: 'Câu xác nhận không đúng. Chưa có tài khoản nào bị xóa.' };
+        return;
+    }
+
+    runBulk('delete');
 }
 
 /*
@@ -579,6 +677,23 @@ async function connectAccount(flow) {
             </button>
 
             <!--
+                The header checkbox only touches this page. Make the broader
+                action explicit, name its exact scope, and keep it separate
+                from the destructive button that appears after selection.
+            -->
+            <button
+                v-if="canManageAccounts && matchingAccountCount"
+                class="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 px-3 py-1.5 text-[13px] text-neutral-600 transition hover:border-neutral-400 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="busy || matchingAccountCount > 10_000"
+                :title="matchingAccountCount > 10_000
+                    ? 'Bộ lọc hiện có hơn 10.000 tài khoản; hãy lọc hẹp hơn.'
+                    : `Chọn tất cả ${matchingAccountCount.toLocaleString('vi-VN')} tài khoản khớp bộ lọc hiện tại.`"
+                @click="selectAllMatching"
+            >
+                Chọn tất cả {{ matchingAccountCount.toLocaleString('vi-VN') }} kết quả
+            </button>
+
+            <!--
                 Says which mechanism is keeping the columns true, the way
                 the posts list does. Only while the socket is actually
                 connected -- a claim that quietly stops being true is worse
@@ -625,6 +740,12 @@ async function connectAccount(flow) {
                     :disabled="busy"
                     @click="runBulk('refresh_token')"
                 >Làm mới token</button>
+                <button
+                    v-if="canManageAccounts"
+                    class="rounded-md bg-red-500/80 px-2.5 py-1 transition hover:bg-red-500 disabled:opacity-40"
+                    :disabled="busy"
+                    @click="deleteSelectedAccounts"
+                >Xóa đã chọn</button>
 
                 <select
                     class="xp-dark-select"

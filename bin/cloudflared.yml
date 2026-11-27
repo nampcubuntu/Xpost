@@ -17,6 +17,15 @@ tunnel: 80a3f824-41ac-4c81-b5e5-99f410a018bc
 credentials-file: C:\Users\nambe\.cloudflared\80a3f824-41ac-4c81-b5e5-99f410a018bc.json
 
 ingress:
+  # Temporary public route for the locally running application. Cloudflare DNS
+  # must point xposter.zenomedia.co to this tunnel while this machine is on.
+  - hostname: xposter.zenomedia.co
+    path: ^/app/
+    service: http://127.0.0.1:8080
+
+  - hostname: xposter.zenomedia.co
+    service: http://127.0.0.1:8000
+
   - hostname: dev.zenomedia.co
     path: ^/app/
     service: http://127.0.0.1:8080

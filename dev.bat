@@ -61,7 +61,7 @@ REM --config, not --url. --url is a single destination, and it overrides
 REM every ingress rule -- which sent the websocket path to the app on 8000,
 REM where the SPA catch-all answered it with HTML instead of an upgrade.
 REM Reverb is on 8080; bin\cloudflared.yml routes /app/ there.
-start "Xpost tunnel" cmd /k "%CFD%" tunnel --config "%~dp0bin\cloudflared.yml" run xpost-dev
+start "Xpost tunnel" cmd /k ""%CFD%" tunnel --config "%~dp0bin\cloudflared.yml" run xpost-dev"
 
 echo.
 echo   Tunnel    https://dev.zenomedia.co   (fixed hostname, safe to register with X)

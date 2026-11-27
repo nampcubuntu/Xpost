@@ -30,7 +30,8 @@ class PublishPostTarget implements ShouldQueue
 
     public int $tries = 1;
 
-    public int $timeout = 300;
+    // A cold card may need a probe and local encode before X processes its upload.
+    public int $timeout = 1200;
 
     /** Failing to publish must not poison the whole batch. */
     public bool $failOnTimeout = false;
@@ -49,7 +50,7 @@ class PublishPostTarget implements ShouldQueue
             // Two workers must never post the same target twice.
             (new WithoutOverlapping("publish-target:{$this->targetId}"))
                 ->releaseAfter(30)
-                ->expireAfter(600),
+                ->expireAfter(1260),
             new SkipIfBatchCancelled,
         ];
     }

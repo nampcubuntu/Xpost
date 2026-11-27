@@ -30,6 +30,7 @@ final class FailureContext
     private const STAGES = [
         'card_unavailable' => 'Tạo card quảng cáo (Ads API)',
         'ads_api_error' => 'Tạo card quảng cáo (Ads API)',
+        'card_connection_failed' => 'Chuẩn bị card — kết nối tới X',
         'proxy_rejected' => 'Kết nối ra ngoài qua proxy',
         'proxy_unreachable' => 'Kết nối ra ngoài qua proxy',
         'out_of_credit' => 'X từ chối vì hết số dư',
@@ -53,6 +54,7 @@ final class FailureContext
 
         $account = $target->account;
         $proxy = $account?->proxy;
+        $currentProxy = $proxy === null ? null : "{$proxy->host}:{$proxy->port}";
         $raw = (string) $target->error_message;
 
         /*
@@ -60,7 +62,10 @@ final class FailureContext
          * existed still names nothing; run through the same rule it now names
          * the proxy that refused it.
          */
-        $explained = $raw === '' ? null : ProxyFailure::fromThrowable(new \RuntimeException($raw), $proxy);
+        $namedProxy = self::explainedProxy($raw);
+        $explained = $raw === '' || $namedProxy !== null
+            ? null
+            : ProxyFailure::fromThrowable(new \RuntimeException($raw), $proxy);
 
         return [
             'code' => $target->error_code,
@@ -69,12 +74,31 @@ final class FailureContext
             // comparing this against a log.
             'raw' => $explained === null ? null : $raw,
             'stage' => self::STAGES[$target->error_code] ?? 'Trong lúc đăng',
-            'blame' => self::blame((string) $target->error_code, $explained !== null),
+            'blame' => self::blame((string) $target->error_code, $explained !== null || $namedProxy !== null),
             'account' => $account?->handle(),
-            'proxy' => $proxy === null ? null : "{$proxy->host}:{$proxy->port}",
-            'proxy_id' => $proxy?->id,
+            'proxy' => $namedProxy ?? $currentProxy,
+            // A historical failure must not link to the account's replacement proxy.
+            'proxy_id' => $namedProxy === null || $namedProxy === $currentProxy ? $proxy?->id : null,
             'at' => $target->updated_at?->toIso8601String(),
         ];
+    }
+
+    /** Recognise only sentences already emitted by ProxyFailure, optionally wrapped by a card failure. */
+    private static function explainedProxy(string $message): ?string
+    {
+        $message = preg_replace('/\AKhông tạo được card cho @[A-Za-z0-9_]+: /u', '', $message) ?? $message;
+
+        foreach ([
+            '/\AProxy (\S+:\d+) (?:từ chối xác thực \(407\)\.|từ chối mở đường tới X\.|không trả lời kịp thời gian chờ\.)/u',
+            '/\AKhông kết nối được tới proxy (\S+:\d+)\./u',
+            '/\AKết nối qua proxy (\S+:\d+) bị ngắt giữa chừng\./u',
+        ] as $pattern) {
+            if (preg_match($pattern, $message, $matches) === 1) {
+                return $matches[1];
+            }
+        }
+
+        return null;
     }
 
     /**

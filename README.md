@@ -47,6 +47,24 @@ test.bat             :: = phpunit
 là bắt buộc** — nó chạy `xpost:dispatch` mỗi phút; thiếu nó thì bài đăng nằm mãi
 ở trạng thái `pending`.
 
+### Video dùng trong card Website
+
+Máy chạy worker cần **FFmpeg và ffprobe 8+**. Windows có thể đặt hai file
+`ffmpeg.exe` và `ffprobe.exe` trong `.tools/ffmpeg/bin/`; Linux dùng các lệnh
+trên `PATH` hoặc bản portable Linux tại `.tools/ffmpeg-linux/bin/` (gồm WSL).
+Có thể chỉ định đường dẫn bằng `XPOST_FFMPEG_BINARY` và
+`XPOST_FFPROBE_BINARY` trong `.env`.
+
+Video sai tỷ lệ card được tự thêm viền đen theo tỷ lệ hợp lệ cần ít viền nhất, giữ đầy
+đủ nội dung. Bản MP4 dùng cho card được lưu riêng và tái sử dụng; tệp gốc dùng
+cho bài đăng video thông thường vẫn được giữ nguyên. Sau khi cập nhật mã và
+khởi động lại worker, mở menu **⋮ → Đăng lại … bài lỗi** cho các bài từng lỗi `card_unavailable`
+do tỷ lệ khung hình; ứng dụng sẽ bỏ qua mã upload cũ khi tạo card mới.
+
+Upload mỗi phần video có thời gian chờ riêng `XPOST_MEDIA_UPLOAD_TIMEOUT`
+(mặc định 120 giây). Khi kết nối gián đoạn trong bước chuẩn bị card, bài sẽ
+được thử lại có khoảng nghỉ, tối đa 3 lần; lỗi xác thực proxy 407 cần sửa proxy.
+
 ---
 
 ## Nó hoạt động thế nào
@@ -78,7 +96,7 @@ Composer (Vue)
 | 10k bài đăng cùng một giây trông như bot | `SchedulePlanner` có 5 chế độ: đăng ngay, đúng giờ, rải đều, ngẫu nhiên (jitter), theo múi giờ từng tài khoản |
 | Nội dung giống hệt nhau trên mọi tài khoản | Spintax `{a\|b\|c}` + biến thể luân phiên/ngẫu nhiên/1:1, render và **đóng băng** ngay lúc fan-out |
 | Hạn mức POST của một X App là nút thắt | Pool nhiều app, `XAppSelector` gán tài khoản vào app ít tải nhất và tự né app đang bị chặn |
-| Worker chết giữa chừng → bài kẹt mãi | Claim có lease; `xpost:reap` trả lại việc bị bỏ rơi sau 15 phút |
+| Worker chết giữa chừng → bài kẹt mãi | Claim có lease; `xpost:reap` trả lại việc bị bỏ rơi sau 30 phút |
 | Đăng trùng khi hai worker cùng chạy | Claim trong transaction + `WithoutOverlapping` theo target |
 | Token OAuth 2.0 hết hạn giữa chiến dịch | `xpost:refresh-tokens` chạy trước 30 phút; refresh có Redis lock chống đua |
 | Đếm 280 ký tự sai với tiếng Việt/URL | `TweetTextWeigher` cài đúng quy tắc weighted length của X (URL = 23, CJK = 2) |

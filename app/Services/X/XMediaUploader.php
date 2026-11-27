@@ -9,6 +9,7 @@ use App\Enums\MediaCategory;
 use App\Exceptions\XApiException;
 use App\Models\PostMedia;
 use App\Models\XAccount;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -26,7 +27,10 @@ final class XMediaUploader
     /** 4 MB is comfortably under the 5 MB per-chunk ceiling. */
     private const CHUNK_BYTES = 4 * 1024 * 1024;
 
-    public function __construct(private readonly XApiClientFactory $clients) {}
+    public function __construct(
+        private readonly XApiClientFactory $clients,
+        private readonly XCardMediaPreparer $cardMedia,
+    ) {}
 
     /**
      * Upload once per account, then reuse. Returns the X media_id.
@@ -48,8 +52,11 @@ final class XMediaUploader
      */
     public function ensureAmplifyUploaded(PostMedia $media, XAccount $account): string
     {
-        return $this->cached($media, $account, 'amplify', fn () => $this->upload(
-            $media, $account, MediaCategory::AmplifyVideo, wantKey: true,
+        // Old amplify uploads may contain a ratio that cards reject. Keep a
+        // separate namespace so retrying a failed card uploads the prepared
+        // video instead of reusing that rejected key.
+        return $this->cached($media, $account, 'amplify:card-v1', fn () => $this->upload(
+            $this->cardMedia->prepare($media), $account, MediaCategory::AmplifyVideo, wantKey: true,
         ));
     }
 
@@ -198,7 +205,9 @@ final class XMediaUploader
         $client->send('POST', self::ENDPOINT."/{$mediaId}/append", multipart: [
             ['name' => 'segment_index', 'contents' => (string) $segmentIndex],
             ['name' => 'media', 'contents' => $chunk, 'filename' => 'chunk'],
-        ]);
+        ], configure: fn (PendingRequest $request) => $request->timeout(
+            max((int) config('xpost.http.timeout', 30), (int) config('xpost.media.upload_timeout', 120)),
+        ));
     }
 
     private function finalize(XApiClient $client, string $mediaId, MediaCategory $category): void

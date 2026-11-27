@@ -9,12 +9,17 @@ use App\Enums\TargetStatus;
 use App\Models\Post;
 use App\Models\PostMedia;
 use App\Models\PostTarget;
+use App\Models\Proxy;
 use App\Models\XAccount;
 use App\Models\XApp;
+use App\Services\Publishing\PostFanoutService;
 use App\Services\Publishing\PostPublisher;
+use App\Services\Publishing\SpendGuard;
 use App\Services\X\XRateLimiter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -105,7 +110,7 @@ class VideoWebsiteCardTest extends TestCase
 
             $media->forceFill(['x_media_ids' => array_merge($media->x_media_ids ?? [], [
                 'media:account:'.$account->id => $isVideo ? '999' : '888',
-                'amplify:account:'.$account->id => '13_999',
+                'amplify:card-v1:account:'.$account->id => '13_999',
             ])])->save();
         }
     }
@@ -468,5 +473,176 @@ class VideoWebsiteCardTest extends TestCase
         ]);
 
         $this->assertSame('5551234', $this->publish($target)['card_uri']);
+    }
+
+    #[Test]
+    public function a_proxy_timeout_before_tweet_creation_retries_and_can_recover(): void
+    {
+        $media = $this->video();
+        $proxy = Proxy::factory()->create(['team_id' => $this->team->id]);
+        $account = $this->adsAccount(['proxy_id' => $proxy->id, 'daily_post_cap' => 50]);
+        $target = $this->target($account, [
+            'rendered_body' => 'Xem clip',
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+            'attempts' => 0,
+        ]);
+        Http::preventStrayRequests();
+        $offline = true;
+        Http::fake([
+            'ads-api.x.com/*' => function () use (&$offline) {
+                if ($offline) {
+                    throw new ConnectionException('cURL error 28: Operation timed out after 30000 milliseconds');
+                }
+
+                return Http::response(['data' => ['card_uri' => 'card://5551234']], 201);
+            },
+            'api.x.com/2/tweets' => Http::response(['data' => ['id' => '777']], 201),
+        ]);
+
+        $outcome = app(PostPublisher::class)->publish($target->fresh());
+        $target->refresh();
+
+        $this->assertTrue($outcome->isDeferred());
+        $this->assertSame(TargetStatus::Pending, $target->status);
+        $this->assertSame('proxy_unreachable', $target->error_code);
+        $this->assertStringContainsString($proxy->host.':'.$proxy->port, $target->error_message);
+        $this->assertSame(1, $target->attempts);
+        $this->assertTrue($target->available_at->isFuture());
+        $this->assertSame(50, app(XRateLimiter::class)->remainingForAccount($account));
+        $this->assertSame(0, $account->fresh()->consecutive_failures);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/2/tweets'));
+
+        $offline = false;
+        $this->assertTrue(app(PostPublisher::class)->publish($target->fresh())->isPublished());
+        $this->assertNull($target->fresh()->error_message);
+    }
+
+    #[Test]
+    public function a_repeated_card_connection_failure_stops_after_three_attempts(): void
+    {
+        $media = $this->video();
+        $proxy = Proxy::factory()->create(['team_id' => $this->team->id]);
+        $account = $this->adsAccount(['proxy_id' => $proxy->id]);
+        $target = $this->target($account, [
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+            'attempts' => 2,
+        ]);
+        Http::fake(['ads-api.x.com/*' => fn () => throw new ConnectionException('cURL error 28: Operation timed out')]);
+        Http::preventStrayRequests();
+
+        $outcome = app(PostPublisher::class)->publish($target->fresh());
+
+        $this->assertTrue($outcome->isFailed());
+        $this->assertSame('proxy_unreachable', $target->fresh()->error_code);
+        $this->assertSame(3, $target->fresh()->attempts);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/2/tweets'));
+    }
+
+    #[Test]
+    public function auto_mode_waits_for_a_card_connection_recovery_without_publishing_a_fallback(): void
+    {
+        config(['xpost.publishing.destination_render' => 'auto']);
+        $media = $this->video();
+        $target = $this->target($this->adsAccount(['proxy_id' => null]), [
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+            'attempts' => 0,
+        ]);
+        Http::fake(['ads-api.x.com/*' => fn () => throw new ConnectionException('cURL error 28: Operation timed out')]);
+        Http::preventStrayRequests();
+
+        $this->assertTrue(app(PostPublisher::class)->publish($target->fresh())->isDeferred());
+        $this->assertSame('card_connection_failed', $target->fresh()->error_code);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/2/tweets'));
+    }
+
+    #[Test]
+    public function proxy_authentication_refusal_is_terminal_and_keeps_its_error_code(): void
+    {
+        $media = $this->video();
+        $proxy = Proxy::factory()->create(['team_id' => $this->team->id]);
+        $target = $this->target($this->adsAccount(['proxy_id' => $proxy->id]), [
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+            'attempts' => 0,
+        ]);
+        Http::fake(['ads-api.x.com/*' => Http::response('Proxy Authentication Required', 407)]);
+        Http::preventStrayRequests();
+
+        $this->assertTrue(app(PostPublisher::class)->publish($target->fresh())->isFailed());
+        $this->assertSame('proxy_rejected', $target->fresh()->error_code);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/2/tweets'));
+    }
+
+    #[Test]
+    #[DataProvider('cardResultsAfterCancellation')]
+    public function a_card_result_after_cancellation_or_deletion_never_creates_a_tweet(string $change, bool $connectionFails): void
+    {
+        $media = $this->video();
+        $account = $this->adsAccount(['daily_post_cap' => 50]);
+        $this->xApp->forceFill(['daily_post_cap' => 1])->save();
+        config(['xpost.publishing.app_burst_per_15min' => 1]);
+        $target = $this->target($account, [
+            'status' => TargetStatus::Publishing,
+            'rendered_url' => 'https://twvideo.top/',
+            'rendered_media_ids' => [$media->id],
+            'attempts' => 2,
+        ]);
+        $spend = app(SpendGuard::class);
+        $spentBefore = $spend->spentCentsToday($this->team->id);
+        $cost = $spend->costCentsFor($target->fresh());
+        Http::preventStrayRequests();
+        Http::fake([
+            'ads-api.x.com/*' => function () use ($target, $account, $change, $connectionFails, $spend, $spentBefore, $cost) {
+                // Verify cancellation happens after the worker reserves its
+                // allowance, with the card request already in progress.
+                $this->assertSame(49, app(XRateLimiter::class)->remainingForAccount($account));
+                $this->assertSame($spentBefore + $cost, $spend->spentCentsToday($this->team->id));
+                $post = $target->post->fresh();
+
+                if ($change === 'delete') {
+                    $post->delete();
+                } else {
+                    app(PostFanoutService::class)->cancel($post);
+                }
+
+                if ($connectionFails) {
+                    throw new ConnectionException('cURL error 28: Operation timed out');
+                }
+
+                return Http::response(['data' => ['card_uri' => 'card://5551234']], 201);
+            },
+            'api.x.com/2/tweets' => Http::response(['data' => ['id' => 'must-not-publish']], 201),
+        ]);
+
+        $outcome = app(PostPublisher::class)->publish($target->fresh());
+        $target->refresh();
+
+        $this->assertTrue($outcome->isCancelled());
+        $this->assertSame(TargetStatus::Cancelled, $target->status);
+        $this->assertSame(2, $target->attempts);
+        $this->assertNull($target->x_tweet_id);
+        $this->assertNull($target->error_code);
+        $this->assertSame(0, $account->fresh()->consecutive_failures);
+        $this->assertSame($spentBefore, $spend->spentCentsToday($this->team->id));
+        $limiter = app(XRateLimiter::class);
+        $this->assertSame(50, $limiter->remainingForAccount($account));
+        // Both app windows had a one-post limit. A new reservation succeeds
+        // only when the abandoned attempt gave both slots back.
+        $this->assertNull($limiter->reserveAppSlot($this->xApp->fresh(), 1));
+        $limiter->releaseAppSlot($this->xApp);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/2/tweets'));
+    }
+
+    public static function cardResultsAfterCancellation(): array
+    {
+        return [
+            'cancelled while card creation succeeds' => ['cancel', false],
+            'deleted while card creation succeeds' => ['delete', false],
+            'cancelled while card transport times out' => ['cancel', true],
+            'deleted while card transport times out' => ['delete', true],
+        ];
     }
 }

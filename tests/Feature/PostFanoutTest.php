@@ -200,6 +200,64 @@ class PostFanoutTest extends TestCase
     }
 
     #[Test]
+    public function cancelling_marks_an_upload_in_progress_without_changing_finished_targets(): void
+    {
+        $post = Post::factory()->create([
+            'team_id' => $this->team->id,
+            'status' => PostStatus::Publishing,
+            'targets_total' => 3,
+            'targets_pending' => 0,
+            'targets_published' => 1,
+            'targets_failed' => 1,
+        ]);
+        $targets = [];
+
+        foreach ([TargetStatus::Publishing, TargetStatus::Published, TargetStatus::Failed] as $status) {
+            $targets[$status->value] = PostTarget::factory()->create([
+                'post_id' => $post->id,
+                'team_id' => $this->team->id,
+                'x_account_id' => XAccount::factory()->create(['team_id' => $this->team->id])->id,
+                'status' => $status,
+                'x_tweet_id' => $status === TargetStatus::Published ? 'already-published' : null,
+            ]);
+        }
+
+        $this->assertSame(1, app(PostFanoutService::class)->cancel($post->fresh()));
+        $this->assertSame(TargetStatus::Cancelled, $targets['publishing']->fresh()->status);
+        $this->assertSame(TargetStatus::Published, $targets['published']->fresh()->status);
+        $this->assertSame('already-published', $targets['published']->fresh()->x_tweet_id);
+        $this->assertSame(TargetStatus::Failed, $targets['failed']->fresh()->status);
+        $this->assertSame(1, $post->fresh()->targets_published);
+        $this->assertSame(1, $post->fresh()->targets_failed);
+        $this->assertSame(0, app(PostFanoutService::class)->cancel($post->fresh()));
+    }
+
+    #[Test]
+    public function deleting_a_post_cancels_a_target_that_is_already_uploading(): void
+    {
+        [$team, $user] = $this->tenant();
+        $this->actingAs($user->refresh());
+        $post = Post::factory()->create([
+            'team_id' => $team->id,
+            'status' => PostStatus::Publishing,
+            'targets_total' => 1,
+            'targets_pending' => 0,
+        ]);
+        $target = PostTarget::factory()->create([
+            'post_id' => $post->id,
+            'team_id' => $team->id,
+            'x_account_id' => XAccount::factory()->create(['team_id' => $team->id])->id,
+            'status' => TargetStatus::Publishing,
+        ]);
+
+        $this->deleteJson('/api/v1/posts/'.$post->id)->assertNoContent();
+
+        $this->assertSoftDeleted($post);
+        $this->assertSame(TargetStatus::Cancelled, $target->fresh()->status);
+        $this->assertNull($target->fresh()->x_tweet_id);
+    }
+
+    #[Test]
     public function a_limited_audience_creates_at_most_that_many_targets(): void
     {
         $this->seedAccounts(20);

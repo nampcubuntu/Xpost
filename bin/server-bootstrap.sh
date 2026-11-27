@@ -44,7 +44,7 @@ apt-get install -y -qq \
     "php${PHP_VERSION}-redis" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" \
     "php${PHP_VERSION}-curl" "php${PHP_VERSION}-zip" "php${PHP_VERSION}-gd" \
     "php${PHP_VERSION}-bcmath" "php${PHP_VERSION}-intl" \
-    nginx mysql-server redis-server supervisor git unzip curl
+    nginx mysql-server redis-server supervisor git unzip curl ffmpeg
 
 if ! command -v composer >/dev/null; then
     say "Composer"

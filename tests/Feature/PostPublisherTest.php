@@ -5,18 +5,26 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Enums\AccountStatus;
+use App\Enums\PostStatus;
 use App\Enums\ReplySettings;
 use App\Enums\TargetStatus;
 use App\Models\Post;
+use App\Models\PostMedia;
 use App\Models\PostTarget;
 use App\Models\XAccount;
 use App\Models\XApp;
+use App\Services\Publishing\PostFanoutService;
 use App\Services\Publishing\PostPublisher;
 use App\Services\Publishing\PublishOutcome;
+use App\Services\Publishing\SpendGuard;
 use App\Services\X\XRateLimiter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\Storage;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -269,6 +277,149 @@ class PostPublisherTest extends TestCase
         $this->publish();
 
         Http::assertSent(fn ($request) => ! array_key_exists('reply_settings', $request->data()));
+    }
+
+    #[Test]
+    #[DataProvider('stoppedBeforePublishing')]
+    public function a_cancelled_or_deleted_post_stops_before_contacting_x_or_reserving_limits(string $change): void
+    {
+        Http::fake();
+        Http::preventStrayRequests();
+        $staleTarget = $this->target->fresh()->load('post');
+
+        match ($change) {
+            'target_cancelled' => $this->target->forceFill(['status' => TargetStatus::Cancelled])->save(),
+            'post_cancelled' => $this->target->post->forceFill(['status' => PostStatus::Cancelled])->save(),
+            'post_deleted' => $this->target->post->delete(),
+        };
+
+        $limiter = Mockery::mock(XRateLimiter::class);
+        $limiter->shouldNotReceive('reserveAccountSlot', 'reserveAppSlot', 'releaseAccountSlot', 'releaseAppSlot');
+        $this->instance(XRateLimiter::class, $limiter);
+        Redis::shouldReceive('eval')->never();
+        Redis::shouldReceive('decrby')->never();
+
+        $outcome = app(PostPublisher::class)->publish($staleTarget);
+
+        $this->assertTrue($outcome->isCancelled());
+        $this->assertSame(TargetStatus::Cancelled, $this->target->fresh()->status);
+        $this->assertSame(0, $this->target->fresh()->attempts);
+        $this->assertNull($this->target->fresh()->x_tweet_id);
+        Http::assertNothingSent();
+    }
+
+    public static function stoppedBeforePublishing(): array
+    {
+        return [
+            'target cancelled after the worker loaded it' => ['target_cancelled'],
+            'post cancelled after the worker loaded it' => ['post_cancelled'],
+            'post deleted after the worker loaded it' => ['post_deleted'],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('uploadFailuresAfterCancellation')]
+    public function an_upload_error_after_cancellation_cannot_requeue_or_fail_the_target(string $failure): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('media/cancelled.jpg', 'image bytes');
+        $this->account->forceFill(['scopes' => ['tweet.write', 'media.write']])->save();
+        $media = PostMedia::factory()->create([
+            'team_id' => $this->team->id,
+            'disk' => 'local',
+            'path' => 'media/cancelled.jpg',
+            'size' => strlen('image bytes'),
+        ]);
+        $this->target->forceFill([
+            'status' => TargetStatus::Publishing,
+            'rendered_media_ids' => [$media->id],
+            'attempts' => 2,
+        ])->save();
+
+        $limiter = Mockery::mock(XRateLimiter::class);
+        $limiter->shouldReceive('reserveAccountSlot')->once()->andReturn(null);
+        $limiter->shouldReceive('reserveAppSlot')->once()->andReturn(null);
+        $limiter->shouldReceive('releaseAccountSlot')->once()->andReturnNull();
+        $limiter->shouldReceive('releaseAppSlot')->once()->andReturnNull();
+        $limiter->shouldReceive('appIsBlocked')->andReturn(false);
+        $limiter->shouldReceive('syncFromResponse')->andReturnNull();
+        $this->instance(XRateLimiter::class, $limiter);
+
+        $spend = app(SpendGuard::class);
+        $spentBefore = $spend->spentCentsToday($this->team->id);
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.x.com/2/media/upload/initialize' => function () use ($failure) {
+                app(PostFanoutService::class)->cancel($this->target->post->fresh());
+
+                return match ($failure) {
+                    'connection' => throw new ConnectionException('cURL error 28: Operation timed out'),
+                    'server' => Http::response(['title' => 'Internal Error'], 500),
+                    'rate_limit' => Http::response(['title' => 'Too Many Requests'], 429),
+                };
+            },
+            'api.x.com/2/tweets' => Http::response(['data' => ['id' => 'must-not-publish']], 201),
+        ]);
+
+        $outcome = $this->publish();
+        $this->target->refresh();
+
+        $this->assertTrue($outcome->isCancelled());
+        $this->assertSame(TargetStatus::Cancelled, $this->target->status);
+        $this->assertSame(2, $this->target->attempts);
+        $this->assertNull($this->target->x_tweet_id);
+        $this->assertNull($this->target->error_code);
+        $this->assertSame($spentBefore, $spend->spentCentsToday($this->team->id));
+        $this->assertSame(0, $this->account->fresh()->consecutive_failures);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/2/tweets'));
+    }
+
+    public static function uploadFailuresAfterCancellation(): array
+    {
+        return [
+            'transport exception' => ['connection'],
+            'API exception' => ['server'],
+            'rate limit exception' => ['rate_limit'],
+        ];
+    }
+
+    #[Test]
+    public function deleting_the_post_during_a_successful_media_upload_stops_before_tweet_creation(): void
+    {
+        Storage::fake('local');
+        Storage::disk('local')->put('media/deleted.jpg', 'image bytes');
+        $this->account->forceFill(['scopes' => ['tweet.write', 'media.write']])->save();
+        $media = PostMedia::factory()->create([
+            'team_id' => $this->team->id,
+            'disk' => 'local',
+            'path' => 'media/deleted.jpg',
+            'size' => strlen('image bytes'),
+        ]);
+        $this->target->forceFill([
+            'status' => TargetStatus::Publishing,
+            'rendered_media_ids' => [$media->id],
+        ])->save();
+        app(XRateLimiter::class)->shouldReceive('releaseAppSlot')->once()->andReturnNull();
+        $spend = app(SpendGuard::class);
+        $spentBefore = $spend->spentCentsToday($this->team->id);
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.x.com/2/media/upload/initialize' => Http::response(['data' => ['id' => '123']]),
+            'api.x.com/2/media/upload/123/append' => Http::response([], 204),
+            'api.x.com/2/media/upload/123/finalize' => function () {
+                $this->target->post->delete();
+
+                return Http::response(['data' => ['processing_info' => ['state' => 'succeeded']]]);
+            },
+            'api.x.com/2/tweets' => Http::response(['data' => ['id' => 'must-not-publish']], 201),
+        ]);
+
+        $this->assertTrue($this->publish()->isCancelled());
+        $this->assertSame(TargetStatus::Cancelled, $this->target->fresh()->status);
+        $this->assertNull($this->target->fresh()->x_tweet_id);
+        $this->assertSame($spentBefore, $spend->spentCentsToday($this->team->id));
+        Http::assertSentCount(3);
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/2/tweets'));
     }
 
     protected function tearDown(): void

@@ -201,7 +201,14 @@ final class PostFanoutService
         return DB::transaction(function () use ($post): int {
             $cancelled = PostTarget::query()
                 ->where('post_id', $post->id)
-                ->whereIn('status', [TargetStatus::Pending->value, TargetStatus::Queued->value])
+                // An upload can still be running when the user cancels or
+                // deletes the post. Mark it too, so the publisher sees the
+                // cancellation before sending the tweet.
+                ->whereIn('status', [
+                    TargetStatus::Pending->value,
+                    TargetStatus::Queued->value,
+                    TargetStatus::Publishing->value,
+                ])
                 ->update(['status' => TargetStatus::Cancelled->value, 'updated_at' => now()]);
 
             $post->forceFill([

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Enums\PostStatus;
 use App\Enums\TargetStatus;
 use App\Events\PostProgressChanged;
 use App\Models\Post;
@@ -288,5 +289,142 @@ class PostProgressBroadcastTest extends TestCase
 
         $this->assertSame(1, $post->targets_pending);
         $this->assertSame(1, $post->targets_failed);
+    }
+
+    #[Test]
+    public function the_last_failure_finishes_the_post_and_broadcasts_its_final_status_immediately(): void
+    {
+        Event::fake([PostProgressChanged::class]);
+        $post = $this->draft([
+            'status' => PostStatus::Publishing,
+            'targets_total' => 1,
+            'targets_pending' => 0,
+        ]);
+        $target = $this->targetFor($post, TargetStatus::Publishing);
+
+        // The final result must pass the one-second progress throttle.
+        PostProgressChanged::announce($post);
+        $target->markFailed('proxy_unreachable', 'Proxy timed out.');
+
+        $this->assertSame(PostStatus::Failed, $post->fresh()->status);
+        $this->assertSame(1, $post->fresh()->targets_failed);
+        Event::assertDispatched(PostProgressChanged::class, fn (PostProgressChanged $event) => $event->postId === $post->id
+            && $event->status === 'failed'
+            && $event->pending === 0
+            && $event->failed === 1);
+        Event::assertDispatchedTimes(PostProgressChanged::class, 2);
+    }
+
+    #[Test]
+    public function the_last_success_finishes_the_post_with_its_publication_time(): void
+    {
+        Event::fake([PostProgressChanged::class]);
+        $post = $this->draft([
+            'status' => PostStatus::Publishing,
+            'targets_total' => 1,
+            'targets_pending' => 0,
+        ]);
+        $target = $this->targetFor($post, TargetStatus::Publishing);
+
+        $target->markPublished('123', 'example', 100);
+
+        $post->refresh();
+        $this->assertSame(PostStatus::Published, $post->status);
+        $this->assertSame(1, $post->targets_published);
+        $this->assertTrue($target->published_at->equalTo($post->published_at));
+        Event::assertDispatched(PostProgressChanged::class, fn (PostProgressChanged $event) => $event->postId === $post->id
+            && $event->status === 'published');
+    }
+
+    #[Test]
+    public function completion_uses_target_results_when_another_workers_counter_update_is_still_pending(): void
+    {
+        Event::fake([PostProgressChanged::class]);
+        $post = $this->draft([
+            'status' => PostStatus::Publishing,
+            'targets_total' => 2,
+            'targets_pending' => 0,
+            'targets_failed' => 0,
+        ]);
+        $finishing = $this->targetFor($post, TargetStatus::Publishing);
+        // A concurrent worker has committed its failure but has not yet
+        // incremented targets_failed in its observer.
+        $this->targetFor($post, TargetStatus::Failed);
+
+        $finishing->markPublished('123', 'example', 100);
+
+        $this->assertSame(PostStatus::PartiallyFailed, $post->fresh()->status);
+        Event::assertDispatched(PostProgressChanged::class, fn (PostProgressChanged $event) => $event->status === 'partially_failed');
+    }
+
+    #[Test]
+    public function zero_pending_count_does_not_finish_a_post_with_an_active_target(): void
+    {
+        Event::fake([PostProgressChanged::class]);
+
+        foreach ([TargetStatus::Pending, TargetStatus::Queued, TargetStatus::Publishing] as $activeStatus) {
+            $post = $this->draft([
+                'status' => PostStatus::Publishing,
+                'targets_total' => 2,
+                'targets_pending' => 0,
+            ]);
+            $finishing = $this->targetFor($post, TargetStatus::Publishing);
+            $active = $this->targetFor($post, $activeStatus);
+
+            $finishing->markFailed('proxy_unreachable', 'Proxy timed out.');
+
+            $this->assertSame(PostStatus::Publishing, $post->fresh()->status, $activeStatus->value);
+
+            $active->markPublished('123', 'example', 100);
+            $this->assertSame(PostStatus::PartiallyFailed, $post->fresh()->status, $activeStatus->value);
+        }
+    }
+
+    #[Test]
+    public function target_completion_does_not_replace_cancelled_draft_or_scheduled_post_status(): void
+    {
+        Event::fake([PostProgressChanged::class]);
+
+        foreach ([PostStatus::Cancelled, PostStatus::Draft, PostStatus::Scheduled] as $status) {
+            $post = $this->draft([
+                'status' => $status,
+                'targets_total' => 1,
+                'targets_pending' => 0,
+            ]);
+            $target = $this->targetFor($post, TargetStatus::Publishing);
+
+            $target->markFailed('proxy_unreachable', 'Proxy timed out.');
+
+            $this->assertSame($status, $post->fresh()->status);
+        }
+    }
+
+    #[Test]
+    public function a_final_skipped_target_finishes_the_post_even_without_a_counter_change(): void
+    {
+        Event::fake([PostProgressChanged::class]);
+        $post = $this->draft([
+            'status' => PostStatus::Publishing,
+            'targets_total' => 2,
+            'targets_pending' => 0,
+            'targets_published' => 1,
+        ]);
+        $this->targetFor($post, TargetStatus::Published);
+        $last = $this->targetFor($post, TargetStatus::Publishing);
+
+        $last->forceFill(['status' => TargetStatus::Skipped])->save();
+
+        $this->assertSame(PostStatus::Published, $post->fresh()->status);
+        Event::assertDispatched(PostProgressChanged::class, fn (PostProgressChanged $event) => $event->status === 'published');
+    }
+
+    private function targetFor(Post $post, TargetStatus $status): PostTarget
+    {
+        return PostTarget::factory()->create([
+            'post_id' => $post->id,
+            'team_id' => $this->team->id,
+            'x_account_id' => XAccount::factory()->create(['team_id' => $this->team->id])->id,
+            'status' => $status,
+        ]);
     }
 }

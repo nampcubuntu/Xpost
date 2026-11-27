@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Publishing;
 
 /**
- * The three things that can happen to a target. Modelled as a value object so
+ * The outcomes of publishing a target. Modelled as a value object so
  * the job can branch on the result without re-reading the row or catching
  * exceptions it has no way to handle.
  */
@@ -32,6 +32,16 @@ final class PublishOutcome
     public static function failed(string $reason, string $message): self
     {
         return new self('failed', reason: $reason, message: $message);
+    }
+
+    public static function cancelled(): self
+    {
+        return new self('cancelled');
+    }
+
+    public function isCancelled(): bool
+    {
+        return $this->state === 'cancelled';
     }
 
     public function isPublished(): bool

@@ -3,6 +3,21 @@
 Hướng dẫn cho một node duy nhất chạy web + worker. Phần cuối nói về cách tách ra
 nhiều node khi cần.
 
+Worker cần **FFmpeg/ffprobe 8+** để kiểm tra và tự thêm viền cho video có tỷ lệ
+không phù hợp với card của X. Script bootstrap cài gói `ffmpeg`; với server
+đã triển khai, cài `sudo apt-get install ffmpeg` và kiểm tra `ffmpeg -version`,
+`ffprobe -version`. Nếu dùng bản portable, đặt `XPOST_FFMPEG_BINARY` và
+`XPOST_FFPROBE_BINARY` trong `.env`, rồi tạo lại config cache và khởi động lại
+worker. Tệp gốc được giữ nguyên, bản video có viền được lưu trên cùng media
+disk và dùng lại cho các tài khoản.
+
+Tác vụ đăng có thời hạn 1200 giây để đủ thời gian upload video qua proxy chậm;
+supervisor publish là 1230 giây. Giữ `REDIS_QUEUE_RETRY_AFTER=1290` (hoặc lớn hơn timeout dài
+nhất) để hàng đợi không giao lại tác vụ khi worker còn đang xử lý. Với database
+hoặc Beanstalkd, kiểm tra biến `DB_QUEUE_RETRY_AFTER` hoặc
+`BEANSTALKD_QUEUE_RETRY_AFTER` tương ứng; SQS cần visibility timeout tương đương.
+Giữ `XPOST_CLAIM_LEASE_MINUTES=30` để reaper không thu hồi tác vụ còn đang chạy.
+
 ## Luồng từ máy bạn tới server
 
 ```
@@ -380,7 +395,7 @@ job hiện tại rồi mới thoát, Supervisor tự khởi động lại.
 | Hàng đợi có bị ùn không | `php artisan horizon:status`, dashboard `/horizon` |
 | Bài đăng đang lỗi gì | `tail -f storage/logs/xpost-$(date +%F).log` |
 | Còn bao nhiêu ngân sách API | Trang **X Apps** trong UI |
-| Target bị kẹt | `php artisan xpost:reap --minutes=15` (đã chạy tự động) |
+| Target bị kẹt | `php artisan xpost:reap --minutes=30` (đã chạy tự động) |
 | Buffer metrics tồn đọng | `php artisan xpost:flush-metrics` |
 
 Cảnh báo nên đặt ở:

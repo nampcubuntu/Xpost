@@ -133,7 +133,7 @@ return [
         'app_burst_per_15min' => (int) env('XPOST_APP_BURST_15MIN', 300),
         'max_targets_per_post' => (int) env('XPOST_MAX_TARGETS_PER_POST', 20_000),
         'dispatch_limit_per_run' => (int) env('XPOST_DISPATCH_LIMIT', 1_000),
-        'claim_lease_minutes' => (int) env('XPOST_CLAIM_LEASE_MINUTES', 15),
+        'claim_lease_minutes' => (int) env('XPOST_CLAIM_LEASE_MINUTES', 30),
         'max_attempts' => (int) env('XPOST_MAX_ATTEMPTS', 5),
     ],
 
@@ -144,6 +144,20 @@ return [
     | Mirrors what the X composer itself enforces, so the Vue counter and the
     | server-side validator agree on what "280" means.
     */
+
+    'media' => [
+        // Portable tools let Windows and WSL share this checkout without
+        // sharing executable formats. Other hosts fall back to PATH.
+        'ffmpeg_binary' => env('XPOST_FFMPEG_BINARY', PHP_OS_FAMILY === 'Windows'
+            ? (is_file(base_path('.tools/ffmpeg/bin/ffmpeg.exe')) ? base_path('.tools/ffmpeg/bin/ffmpeg.exe') : 'ffmpeg')
+            : (PHP_OS_FAMILY === 'Linux' && is_file(base_path('.tools/ffmpeg-linux/bin/ffmpeg')) ? base_path('.tools/ffmpeg-linux/bin/ffmpeg') : 'ffmpeg')),
+        'ffprobe_binary' => env('XPOST_FFPROBE_BINARY', PHP_OS_FAMILY === 'Windows'
+            ? (is_file(base_path('.tools/ffmpeg/bin/ffprobe.exe')) ? base_path('.tools/ffmpeg/bin/ffprobe.exe') : 'ffprobe')
+            : (PHP_OS_FAMILY === 'Linux' && is_file(base_path('.tools/ffmpeg-linux/bin/ffprobe')) ? base_path('.tools/ffmpeg-linux/bin/ffprobe') : 'ffprobe')),
+        'conversion_timeout' => 120,
+        // A 4 MB chunk over an account proxy can outlast ordinary API requests.
+        'upload_timeout' => (int) env('XPOST_MEDIA_UPLOAD_TIMEOUT', 120),
+    ],
 
     'composer' => [
         'max_weighted_length' => 280,

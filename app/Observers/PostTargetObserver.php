@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Observers;
 
+use App\Enums\PostStatus;
 use App\Enums\TargetStatus;
 use App\Events\PostProgressChanged;
 use App\Models\Post;
@@ -34,13 +35,43 @@ class PostTargetObserver
         $leaving = $this->column($from);
         $entering = $this->column($to);
 
-        if ($leaving === $entering) {
+        if ($leaving === $entering && ! $target->status->isTerminal()) {
             return;
         }
 
-        $this->move($target->post_id, $entering, $leaving);
+        if ($leaving !== $entering) {
+            $this->move($target->post_id, $entering, $leaving);
+        }
+
+        if ($target->status->isTerminal()) {
+            $this->complete($target->post_id);
+        }
 
         $this->announce($target);
+    }
+
+    /** Close the post before broadcasting its final target's result. */
+    private function complete(int $postId): void
+    {
+        // Publishing targets do not contribute to targets_pending. Inspect
+        // actual rows, and choose the outcome in the same conditional update:
+        // another worker may have saved its target before moving its counters.
+        $published = "exists (select 1 from post_targets where post_targets.post_id = posts.id and post_targets.status = 'published')";
+        $failed = "exists (select 1 from post_targets where post_targets.post_id = posts.id and post_targets.status = 'failed')";
+
+        Post::withoutGlobalScopes()
+            ->whereKey($postId)
+            // A completion racing cancellation must not revive the post.
+            ->where('status', PostStatus::Publishing->value)
+            ->whereNotExists(fn ($query) => $query
+                ->selectRaw('1')
+                ->from('post_targets')
+                ->whereColumn('post_targets.post_id', 'posts.id')
+                ->whereNotIn('post_targets.status', TargetStatus::terminal()))
+            ->update([
+                'status' => DB::raw("case when {$published} and {$failed} then 'partially_failed' when {$published} then 'published' else 'failed' end"),
+                'published_at' => DB::raw('coalesce(posts.published_at, (select min(post_targets.published_at) from post_targets where post_targets.post_id = posts.id))'),
+            ]);
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Publishing;
 
 use App\Enums\AccountStatus;
+use App\Enums\PostStatus;
 use App\Enums\TargetStatus;
 use App\Exceptions\XApiException;
 use App\Exceptions\XRateLimitException;
@@ -20,14 +21,14 @@ use App\Services\X\XCardService;
 use App\Services\X\XMediaUploader;
 use App\Services\X\XRateLimiter;
 use App\Support\ProxyFailure;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Publishes exactly one target.
  *
- * Every outcome is one of three things, and the caller (the job) only needs to
- * distinguish them: Published, Deferred (retry later, with a delay), or Failed
- * (terminal). Nothing here throws for an expected condition -- a rate limit is
+ * Outcomes are Published, Deferred (retry later, with a delay), Failed, or
+ * Cancelled. Nothing here throws for an expected condition -- a rate limit is
  * data, not an exception, by the time it leaves this class.
  */
 final class PostPublisher
@@ -57,6 +58,10 @@ final class PostPublisher
 
         $target->loadMissing(['account.app', 'account.proxy', 'post']);
         $account = $target->account;
+
+        if (($cancelled = $this->cancellationOutcome($target)) !== null) {
+            return $cancelled;
+        }
 
         if ($account === null) {
             return $this->fail($target, 'account_missing', 'The account was deleted after fan-out.');
@@ -130,6 +135,10 @@ final class PostPublisher
         try {
             $cardUri = $this->resolveCard($target, $account);
 
+            if (($cancelled = $this->cancellationOutcome($target, $account, $app)) !== null) {
+                return $cancelled;
+            }
+
             /*
              * Under card_only a post that wanted a card and did not get one is
              * a failure, not something to publish a lesser version of. The
@@ -148,6 +157,12 @@ final class PostPublisher
             // A card supplies its own media; uploading it twice would cost an
             // extra transcode per account for a file the post never references.
             $mediaIds = $cardUri === null ? $this->resolveMedia($target, $account) : [];
+
+            // An upload can take minutes. Re-read cancellation before the
+            // irreversible tweet request, even when the cached post still exists.
+            if (($cancelled = $this->cancellationOutcome($target, $account, $app)) !== null) {
+                return $cancelled;
+            }
 
             $payload = new TweetPayload(
                 text: (string) $target->rendered_body,
@@ -179,11 +194,32 @@ final class PostPublisher
 
             return PublishOutcome::published($result->id);
         } catch (XRateLimitException $e) {
+            if (($cancelled = $this->cancellationOutcome($target, $account, $app)) !== null) {
+                return $cancelled;
+            }
+
             $this->metrics->recordPublish($target, 0, false, 'rate_limited');
 
             return $this->defer($target, $e->retryAfterSeconds(), 'x_rate_limited');
         } catch (XApiException $e) {
+            if (($cancelled = $this->cancellationOutcome($target, $account, $app)) !== null) {
+                return $cancelled;
+            }
+
             $this->metrics->recordPublish($target, 0, false, $e->errorCode);
+
+            // These connection errors occur while preparing a card, before
+            // POST /2/tweets. Retrying cannot duplicate a published tweet.
+            if (in_array($e->errorCode, ['proxy_unreachable', 'card_connection_failed', 'proxy_rejected'], true)) {
+                $this->limiter->releaseAccountSlot($account);
+                $this->limiter->releaseAppSlot($app);
+
+                if ($e->errorCode !== 'proxy_rejected' && $target->attempts < 2) {
+                    return $this->defer($target, $this->backoffSeconds($target->attempts), $e->errorCode, $e->getMessage());
+                }
+
+                return $this->fail($target, $e->errorCode, $e->getMessage());
+            }
 
             /*
              * No money, not a bad post. Every account is refused at once, so
@@ -212,6 +248,10 @@ final class PostPublisher
 
             return $this->fail($target, $e->errorCode, $e->getMessage());
         } catch (\Throwable $e) {
+            if (! $published && ($cancelled = $this->cancellationOutcome($target, $account, $app)) !== null) {
+                return $cancelled;
+            }
+
             Log::channel('xpost')->error('Unexpected publish failure', [
                 'target_id' => $target->id,
                 'account_id' => $account->id,
@@ -254,6 +294,36 @@ final class PostPublisher
                 $this->spend->release((int) $target->team_id, $costCents);
             }
         }
+    }
+
+    private function cancellationOutcome(PostTarget $target, ?XAccount $account = null, ?XApp $app = null): ?PublishOutcome
+    {
+        $current = $target->fresh('post');
+
+        if ($current !== null && $current->status !== TargetStatus::Cancelled
+            && $current->post !== null && $current->post->status !== PostStatus::Cancelled) {
+            return null;
+        }
+
+        if ($current !== null && ! $current->status->isTerminal()) {
+            $current->forceFill([
+                'status' => TargetStatus::Cancelled,
+                'claimed_at' => null,
+                'claimed_by' => null,
+                'error_code' => null,
+                'error_message' => null,
+            ])->save();
+        }
+
+        if ($account !== null) {
+            $this->limiter->releaseAccountSlot($account);
+        }
+
+        if ($app !== null) {
+            $this->limiter->releaseAppSlot($app);
+        }
+
+        return PublishOutcome::cancelled();
     }
 
     /** A budget is spent for the day, so retrying before then is pointless. */
@@ -308,10 +378,28 @@ final class PostPublisher
             $target->forceFill(['card_uri' => $cardUri])->save();
 
             return $cardUri;
+        } catch (ConnectionException $e) {
+            $explained = ProxyFailure::fromThrowable($e, $account->proxy);
+            $code = $explained === null ? 'card_connection_failed' : 'proxy_unreachable';
+
+            // A CONNECT tunnel can surface proxy authentication as a transport error.
+            if ($explained !== null && str_contains($explained, 'từ chối xác thực (407)')) {
+                $code = 'proxy_rejected';
+            }
+
+            throw new XApiException(
+                $explained ?? 'Kết nối tới X bị gián đoạn khi chuẩn bị card. Vui lòng thử lại.',
+                errorCode: $code,
+                previous: $e,
+            );
         } catch (\Throwable $e) {
             // Through the explainer first: a card is minted seconds before the
             // post that carries it and over the same proxy, so this is one of
             // the likeliest places for a proxy's refusal to surface.
+            if ($e instanceof XApiException && $e->errorCode === 'proxy_rejected') {
+                throw $e;
+            }
+
             $this->cardError = ProxyFailure::fromThrowable($e, $account->proxy) ?? $e->getMessage();
 
             Log::channel('xpost')->warning('Card build failed, publishing without one', [
@@ -404,7 +492,7 @@ final class PostPublisher
             ->all();
     }
 
-    private function defer(PostTarget $target, int $seconds, string $reason): PublishOutcome
+    private function defer(PostTarget $target, int $seconds, string $reason, ?string $message = null): PublishOutcome
     {
         $seconds = max(5, min($seconds, 86400));
 
@@ -415,6 +503,7 @@ final class PostPublisher
             'claimed_at' => null,
             'claimed_by' => null,
             'error_code' => $reason,
+            'error_message' => $message,
         ])->save();
 
         return PublishOutcome::deferred($seconds, $reason);

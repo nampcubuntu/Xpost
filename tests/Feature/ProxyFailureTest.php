@@ -12,6 +12,7 @@ use App\Models\Team;
 use App\Models\User;
 use App\Models\XAccount;
 use App\Services\X\XApiClientFactory;
+use App\Support\FailureContext;
 use App\Support\ProxyFailure;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -248,5 +249,103 @@ class ProxyFailureTest extends TestCase
         );
 
         $this->assertStringContainsString('từ chối xác thực', (string) $explained);
+    }
+
+    #[Test]
+    public function an_already_explained_card_timeout_is_blamed_on_the_proxy(): void
+    {
+        $proxy = $this->proxy();
+        $message = 'Không tạo được card cho @pedrodelc: Proxy 157.15.39.126:21466 không trả lời kịp thời gian chờ. '
+            .'Proxy quá tải hoặc đường tới nó đang tắc.';
+
+        $context = $this->failureContext($message, $proxy);
+
+        $this->assertSame('card_unavailable', $context['code']);
+        $this->assertSame('Tạo card quảng cáo (Ads API)', $context['stage']);
+        $this->assertSame('proxy', $context['blame']);
+        $this->assertSame('157.15.39.126:21466', $context['proxy']);
+        $this->assertSame($proxy->id, $context['proxy_id']);
+        $this->assertSame($message, $context['message']);
+        $this->assertNull($context['raw']);
+    }
+
+    #[Test]
+    public function each_existing_proxy_explanation_survives_the_card_wrapper(): void
+    {
+        $proxy = $this->proxy();
+        $messages = [ProxyFailure::fromStatus(407, $proxy)];
+
+        foreach ([
+            'cURL error 7: Failed to connect to 157.15.39.126 port 21466',
+            'cURL error 7: CONNECT tunnel failed, response 502',
+            'cURL error 28: Operation timed out after 30000 milliseconds',
+            'cURL error 35: SSL connect error',
+            'cURL error 56: Connection reset by peer',
+        ] as $raw) {
+            $messages[] = ProxyFailure::fromThrowable(new RuntimeException($raw), $proxy);
+        }
+
+        foreach ($messages as $message) {
+            $this->assertNotNull($message);
+
+            foreach ([$message, 'Không tạo được card cho @pedrodelc: '.$message] as $stored) {
+                $context = $this->failureContext($stored, $proxy);
+                $this->assertSame('proxy', $context['blame']);
+                $this->assertSame($stored, $context['message']);
+                $this->assertNull($context['raw']);
+            }
+        }
+    }
+
+    #[Test]
+    public function a_historical_explanation_does_not_accuse_a_replacement_proxy(): void
+    {
+        $oldProxy = $this->proxy();
+        $message = 'Không tạo được card cho @pedrodelc: '.ProxyFailure::fromThrowable(
+            new RuntimeException('cURL error 35: SSL connect error'), $oldProxy,
+        );
+
+        foreach ([
+            $this->proxy(['host' => '192.0.2.55']),
+            $this->proxy(['port' => 12345]),
+            null,
+        ] as $currentProxy) {
+            $context = $this->failureContext($message, $currentProxy);
+
+            $this->assertSame('proxy', $context['blame']);
+            $this->assertSame('157.15.39.126:21466', $context['proxy']);
+            $this->assertNull($context['proxy_id']);
+            $this->assertSame($message, $context['message']);
+            $this->assertNull($context['raw']);
+        }
+    }
+
+    #[Test]
+    public function unrelated_proxy_mentions_and_other_service_errors_are_not_proxy_evidence(): void
+    {
+        $proxy = $this->proxy();
+
+        foreach ([
+            'Không tạo được card cho @pedrodelc: Expected media with dimensions fulfilling width to height ratio',
+            'Không tạo được card cho @pedrodelc: Ads API từ chối. Proxy 157.15.39.126:21466 đang hoạt động.',
+            'Pusher error: cURL error 28: Failed to connect to 127.0.0.1 port 8080 after 10013 ms',
+        ] as $message) {
+            $context = $this->failureContext($message, $proxy);
+
+            $this->assertSame('x', $context['blame']);
+            $this->assertSame($message, $context['message']);
+            $this->assertNull($context['raw']);
+        }
+    }
+
+    private function failureContext(string $message, ?Proxy $proxy): array
+    {
+        $account = (new XAccount)->forceFill(['username' => 'pedrodelc'])->setRelation('proxy', $proxy);
+        $target = (new PostTarget)->forceFill([
+            'error_code' => 'card_unavailable',
+            'error_message' => $message,
+        ])->setRelation('account', $account);
+
+        return FailureContext::for($target);
     }
 }

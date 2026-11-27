@@ -19,7 +19,7 @@ use Illuminate\Console\Command;
 class ReapStuckTargets extends Command
 {
     protected $signature = 'xpost:reap
-                            {--minutes=15 : Age of the claim before it is considered lost}
+                            {--minutes=30 : Age of the claim before it is considered lost}
                             {--max-attempts=5 : Give up on the target past this many attempts}';
 
     protected $description = 'Return abandoned post targets to the pending pool';
